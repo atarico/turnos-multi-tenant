@@ -1,65 +1,160 @@
-import Image from "next/image";
+import Link from "next/link";
+import {
+  ArrowRight,
+  CalendarCheck,
+  Clock,
+  CreditCard,
+  MessageCircle,
+  Sparkles,
+} from "lucide-react";
 
-export default function Home() {
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+
+export default function HomePage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6">
+      {/* ── Nav ── */}
+      <header className="flex items-center justify-between py-6">
+        <span className="font-display text-xl font-semibold tracking-tight">
+          Turnos<span className="text-gold">.</span>
+        </span>
+        <nav className="flex items-center gap-2">
+          <Link href="/ingresar">
+            <Button variant="ghost" size="sm">
+              Ingresar
+            </Button>
+          </Link>
+          <Link href="/registro">
+            <Button size="sm">Crear mi negocio</Button>
+          </Link>
+        </nav>
+      </header>
+
+      {/* ── Hero ── */}
+      <section className="grid flex-1 items-center gap-12 py-12 lg:grid-cols-[1.1fr_0.9fr] lg:gap-8">
+        {/* Columna texto */}
+        <div className="flex flex-col items-start">
+          <div className="animate-rise">
+            <Badge variant="gold">
+              <Sparkles className="size-3.5" />
+              SaaS de reservas para profesionales
+            </Badge>
+          </div>
+
+          <h1
+            className="animate-rise mt-6 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl"
+            style={{ animationDelay: "80ms" }}
+          >
+            Tu agenda <span className="text-gold">llena</span>,
+            <br />
+            sin mover un dedo.
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+
+          <p
+            className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted"
+            style={{ animationDelay: "160ms" }}
+          >
+            Calendario inteligente, cobros con Mercado Pago y Stripe, y
+            recordatorios automáticos por WhatsApp. Tus clientes reservan solos,
+            vos cobrás antes del turno.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+          <div
+            className="animate-rise mt-8 flex flex-wrap items-center gap-3"
+            style={{ animationDelay: "240ms" }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            <Link href="/registro">
+              <Button size="lg">
+                Crear mi negocio
+                <ArrowRight className="size-4" />
+              </Button>
+            </Link>
+            <Link href="#como-funciona">
+              <Button variant="outline" size="lg">
+                Ver cómo funciona
+              </Button>
+            </Link>
+          </div>
+
+          <div
+            className="animate-rise mt-10 flex flex-wrap gap-x-6 gap-y-3 text-sm text-faint"
+            style={{ animationDelay: "320ms" }}
           >
-            Documentation
-          </a>
+            <span className="inline-flex items-center gap-2">
+              <CreditCard className="size-4 text-gold-dim" />
+              Mercado Pago &amp; Stripe
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <MessageCircle className="size-4 text-gold-dim" />
+              Recordatorios por WhatsApp
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <CalendarCheck className="size-4 text-gold-dim" />
+              Multi-negocio
+            </span>
+          </div>
         </div>
-      </main>
-    </div>
+
+        {/* Columna visual: preview de un turno */}
+        <div
+          className="animate-rise relative"
+          style={{ animationDelay: "200ms" }}
+        >
+          {/* halo dorado detrás de la card */}
+          <div className="animate-glow absolute -inset-6 -z-10 rounded-full bg-gold/15 blur-3xl" />
+
+          <Card className="p-6">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-muted">
+                Próximo turno
+              </span>
+              <Badge variant="success">Confirmado</Badge>
+            </div>
+
+            <div className="mt-5 flex items-center gap-4">
+              <div className="flex size-12 items-center justify-center rounded-full bg-gold/15 font-display text-lg font-semibold text-gold">
+                MR
+              </div>
+              <div>
+                <p className="font-medium text-foreground">Martina Ríos</p>
+                <p className="text-sm text-muted">Corte &amp; color</p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center gap-4 border-t border-border pt-5 text-sm">
+              <span className="inline-flex items-center gap-2 text-foreground">
+                <Clock className="size-4 text-gold" />
+                Hoy, 15:30
+              </span>
+              <span className="ml-auto font-display text-lg font-semibold text-gold">
+                $8.500
+              </span>
+            </div>
+          </Card>
+
+          {/* mini fila de disponibilidad */}
+          <Card className="mt-4 flex items-center gap-2 p-4">
+            {["09:00", "11:30", "15:30", "17:00"].map((h) => (
+              <span
+                key={h}
+                className={
+                  h === "15:30"
+                    ? "flex-1 rounded-lg bg-gold py-2 text-center text-sm font-medium text-on-gold"
+                    : "flex-1 rounded-lg bg-surface-2 py-2 text-center text-sm text-muted"
+                }
+              >
+                {h}
+              </span>
+            ))}
+          </Card>
+        </div>
+      </section>
+
+      <footer className="border-t border-border py-6 text-sm text-faint">
+        Hecho para profesionales que valoran su tiempo.
+      </footer>
+    </main>
   );
 }
