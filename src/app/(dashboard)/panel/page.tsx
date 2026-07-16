@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { CalendarDays, Clock, LogOut, Wallet } from "lucide-react";
+import Link from "next/link";
+import { CalendarDays, Clock, LogOut, Plus, Wallet } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -49,12 +50,21 @@ export default async function PanelPage() {
             turnos.app/{tenant.slug} · {COUNTRY_LABELS[tenant.country]}
           </p>
         </div>
-        <form action={signOutAction}>
-          <button className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground">
-            <LogOut className="size-4" />
-            Salir
-          </button>
-        </form>
+        <div className="flex items-center gap-4">
+          <Link
+            href="/panel/nueva-reserva"
+            className="inline-flex h-11 items-center gap-2 rounded-xl bg-gold px-5 text-sm font-medium tracking-tight text-on-gold transition-all hover:bg-gold-bright active:scale-[0.98] shadow-[0_4px_24px_-6px_rgba(227,178,60,0.55)]"
+          >
+            <Plus className="size-4" />
+            Nueva reserva
+          </Link>
+          <form action={signOutAction}>
+            <button className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground">
+              <LogOut className="size-4" />
+              Salir
+            </button>
+          </form>
+        </div>
       </header>
 
       {/* Métricas — placeholders que se activan en las próximas fases. */}
