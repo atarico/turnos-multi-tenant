@@ -1,13 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { z } from "zod";
 
-import { type ActionState, errorState } from "@/core/action";
+import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
+import { friendlyBookingError } from "../domain/booking-errors";
 import { resolveDayRange } from "../domain/day-range";
 import { bookingSchema } from "../domain/schemas";
 import { availableWeekdays, generateSlots } from "../domain/slots";
@@ -18,16 +18,6 @@ import {
   getStaffAvailability,
   listStaffForService,
 } from "./queries";
-
-/** Mapea issues de zod a { campo: mensaje } para pintar bajo cada input. */
-function zodFieldErrors(error: z.ZodError): Record<string, string> {
-  const fields: Record<string, string> = {};
-  for (const issue of error.issues) {
-    const key = issue.path[0];
-    if (typeof key === "string" && !fields[key]) fields[key] = issue.message;
-  }
-  return fields;
-}
 
 /**
  * Profesionales que ofrecen un servicio. Resuelve el negocio del usuario
@@ -98,19 +88,6 @@ export async function getSlotsAction(
   });
 
   return ok(slots);
-}
-
-/** Traduce errores crudos de la RPC create_booking a algo accionable. */
-function friendlyBookingError(message: string): string {
-  const m = message.toLowerCase();
-  if (m.includes("no quedan lugares")) return "No quedan lugares en esa franja. Elegí otra.";
-  if (m.includes("ya tiene un turno")) return "El profesional ya tiene un turno en ese horario.";
-  if (m.includes("no atiende")) return "El profesional no atiende en ese horario.";
-  if (m.includes("ya pasó")) return "Esa franja ya pasó. Elegí otra.";
-  if (m.includes("no ofrece")) return "Ese profesional no ofrece este servicio.";
-  if (m.includes("profesional no disponible")) return "El profesional no está disponible.";
-  if (m.includes("servicio no disponible")) return "El servicio no está disponible.";
-  return "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.";
 }
 
 /**
