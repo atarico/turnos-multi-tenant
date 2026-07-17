@@ -1,7 +1,5 @@
 "use server";
 
-import { TZDate } from "@date-fns/tz";
-import { addDays } from "date-fns";
 import { revalidatePath } from "next/cache";
 import type { z } from "zod";
 
@@ -10,6 +8,7 @@ import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
+import { resolveDayRange } from "../domain/day-range";
 import { bookingSchema } from "../domain/schemas";
 import { availableWeekdays, generateSlots } from "../domain/slots";
 import type { AvailableSlot, BookableStaff, WeeklyAvailability } from "../domain/types";
@@ -74,13 +73,8 @@ export async function getSlotsAction(
   const tenant = await getCurrentTenant();
   if (!tenant) return err(appError("no_tenant", "No encontramos tu negocio."));
 
-  const [yearStr, monthStr, dayStr] = dateStr.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  const day = Number(dayStr);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
-    return err(appError("bad_date", "Fecha inválida."));
-  }
+  const dayRange = resolveDayRange(dateStr, tenant.timezone);
+  if (!dayRange) return err(appError("bad_date", "Fecha inválida."));
 
   const serviceResult = await getService(tenant.id, serviceId);
   if (!serviceResult.ok) return serviceResult;
@@ -89,20 +83,11 @@ export async function getSlotsAction(
   const availabilityResult = await getStaffAvailability(staffId);
   if (!availabilityResult.ok) return availabilityResult;
 
-  // Rango [inicio de día, inicio del día siguiente) en la timezone del negocio,
-  // normalizado a ISO UTC ("…Z") para el filtro sobre columnas timestamptz.
-  const dayStart = new TZDate(year, month - 1, day, 0, 0, 0, tenant.timezone);
-  const dayEnd = addDays(dayStart, 1);
-
-  const loadResult = await getBookingLoad(
-    staffId,
-    new Date(dayStart.getTime()).toISOString(),
-    new Date(dayEnd.getTime()).toISOString(),
-  );
+  const loadResult = await getBookingLoad(staffId, dayRange.startIso, dayRange.endIso);
   if (!loadResult.ok) return loadResult;
 
   const slots = generateSlots({
-    date: new Date(year, month - 1, day),
+    date: dayRange.date,
     timezone: tenant.timezone,
     serviceId,
     durationMin: service.durationMin,
