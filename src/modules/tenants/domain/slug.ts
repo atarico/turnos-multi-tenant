@@ -39,3 +39,13 @@ export function randomSuffix(length = 4): string {
     .toString(36)
     .slice(2, 2 + length);
 }
+
+/**
+ * Única fuente de verdad para el slug de un tenant. La usan tanto el alta
+ * desde el onboarding (`tenants/application/actions.ts`) como la del registro
+ * (`auth/application/actions.ts`): tener una sola implementación evita que
+ * los dos caminos se desincronicen.
+ */
+export function generateTenantSlug(name: string): string {
+  return `${slugify(name) || "negocio"}-${randomSuffix()}`;
+}

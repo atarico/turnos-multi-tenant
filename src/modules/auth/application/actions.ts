@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
-import { randomSuffix, slugify } from "@/modules/tenants/domain/slug";
+import { generateTenantSlug } from "@/modules/tenants/domain/slug";
 
 import { loginSchema, registerSchema } from "../domain/schemas";
 
@@ -70,7 +70,7 @@ export async function signUpAction(
   }
 
   // Hay sesión → creamos el negocio de forma atómica vía la función Postgres.
-  const slug = `${slugify(businessName) || "negocio"}-${randomSuffix()}`;
+  const slug = generateTenantSlug(businessName);
   const { error: rpcError } = await supabase.rpc("create_business", {
     p_name: businessName,
     p_slug: slug,
