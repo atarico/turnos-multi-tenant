@@ -8,7 +8,7 @@ import { type ActionState, errorState } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
 
 import { SUPPORTED_COUNTRIES } from "../domain/countries";
-import { randomSuffix, slugify } from "../domain/slug";
+import { generateTenantSlug } from "../domain/slug";
 
 const createBusinessSchema = z.object({
   businessName: z
@@ -43,7 +43,7 @@ export async function createBusinessAction(
   }
 
   const supabase = await createClient();
-  const slug = `${slugify(parsed.data.businessName) || "negocio"}-${randomSuffix()}`;
+  const slug = generateTenantSlug(parsed.data.businessName);
 
   const { error } = await supabase.rpc("create_business", {
     p_name: parsed.data.businessName,
