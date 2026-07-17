@@ -2,24 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { z } from "zod";
 
-import { type ActionState, errorState } from "@/core/action";
+import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 import { randomSuffix, slugify } from "@/modules/tenants/domain/slug";
 
 import { loginSchema, registerSchema } from "../domain/schemas";
-
-/** Mapea los issues de zod a un { campo: mensaje } para pintar bajo cada input. */
-function zodFieldErrors(error: z.ZodError): Record<string, string> {
-  const fields: Record<string, string> = {};
-  for (const issue of error.issues) {
-    const key = issue.path[0];
-    if (typeof key === "string" && !fields[key]) fields[key] = issue.message;
-  }
-  return fields;
-}
 
 /** Traduce los errores crudos de Supabase Auth a algo que el usuario entienda. */
 function friendlyAuthError(message: string): string {
