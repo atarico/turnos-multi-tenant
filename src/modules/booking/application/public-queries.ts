@@ -98,6 +98,31 @@ export async function listPublicStaffForService(
   return ok((data as PublicStaffRow[]).map(toPublicStaff));
 }
 
+/**
+ * ¿El profesional pertenece a este negocio? `public_availability` y
+ * `public_booking_load` NO tienen columna `tenant_id`, así que el aislamiento
+ * cross-tenant del camino anónimo se ancla acá, sobre `public_staff` (que sí
+ * lo tiene). Sin este chequeo, una llamada cruda a la Server Action podría
+ * pedir la agenda de un staff de otro negocio con cualquier slug.
+ */
+export async function staffBelongsToTenant(
+  tenantId: string,
+  staffId: string,
+): Promise<Result<boolean>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("public_staff")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("id", staffId)
+    .maybeSingle();
+
+  if (error) {
+    return err(appError("staff_query_failed", "No pudimos cargar los profesionales."));
+  }
+  return ok(data != null);
+}
+
 /** Horario semanal recurrente de un profesional activo. */
 export async function getPublicStaffAvailability(
   staffId: string,

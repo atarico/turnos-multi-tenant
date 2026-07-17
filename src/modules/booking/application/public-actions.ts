@@ -15,6 +15,7 @@ import {
   getPublicService,
   getPublicStaffAvailability,
   listPublicStaffForService,
+  staffBelongsToTenant,
 } from "./public-queries";
 
 /**
@@ -31,6 +32,23 @@ import {
  */
 
 const TENANT_NOT_FOUND = appError("tenant_not_found", "No encontramos ese negocio.");
+const STAFF_NOT_FOUND = appError("staff_not_found", "Ese profesional no está disponible.");
+
+/**
+ * Ancla de aislamiento cross-tenant: el `staffId` llega del cliente, así que
+ * antes de leer su agenda hay que confirmar que pertenece al negocio resuelto
+ * por slug. En el flujo normal el id sale de `listPublicStaffForService`
+ * (ya scopeado), pero una Server Action es invocable directo con un id ajeno.
+ */
+async function assertStaffInTenant(
+  tenantId: string,
+  staffId: string,
+): Promise<Result<void>> {
+  const belongs = await staffBelongsToTenant(tenantId, staffId);
+  if (!belongs.ok) return belongs;
+  if (!belongs.value) return err(STAFF_NOT_FOUND);
+  return ok(undefined);
+}
 
 /** Profesionales que ofrecen un servicio, para el negocio resuelto por slug. */
 export async function listPublicStaffAction(
@@ -52,6 +70,9 @@ export async function getPublicAvailabilityAction(
 ): Promise<Result<{ weekdays: number[]; windows: WeeklyAvailability[] }>> {
   const tenant = await getTenantBySlug(slug);
   if (!tenant) return err(TENANT_NOT_FOUND);
+
+  const staffCheck = await assertStaffInTenant(tenant.id, staffId);
+  if (!staffCheck.ok) return staffCheck;
 
   const result = await getPublicStaffAvailability(staffId);
   if (!result.ok) return result;
@@ -76,6 +97,9 @@ export async function getPublicSlotsAction(
 ): Promise<Result<AvailableSlot[]>> {
   const tenant = await getTenantBySlug(slug);
   if (!tenant) return err(TENANT_NOT_FOUND);
+
+  const staffCheck = await assertStaffInTenant(tenant.id, staffId);
+  if (!staffCheck.ok) return staffCheck;
 
   const dayRange = resolveDayRange(dateStr, tenant.timezone);
   if (!dayRange) return err(appError("bad_date", "Fecha inválida."));
