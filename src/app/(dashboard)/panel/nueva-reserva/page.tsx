@@ -3,11 +3,29 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import {
+  createBookingAction,
+  getAvailabilityAction,
+  getSlotsAction,
+  listStaffAction,
+} from "@/modules/booking/application/actions";
 import { listServices } from "@/modules/booking/application/queries";
-import { BookingFlow } from "@/modules/booking/ui/booking-flow";
+import {
+  BookingFlow,
+  type BookingActions,
+} from "@/modules/booking/ui/booking-flow";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
 export const metadata: Metadata = { title: "Nueva reserva" };
+
+// Camino autenticado: las acciones resuelven el negocio de la sesión en el
+// servidor, así que el flujo las usa tal cual, sin slug.
+const panelActions: BookingActions = {
+  listStaff: listStaffAction,
+  getAvailability: getAvailabilityAction,
+  getSlots: getSlotsAction,
+  createBooking: createBookingAction,
+};
 
 export default async function NuevaReservaPage() {
   const tenant = await getCurrentTenant();
@@ -42,7 +60,11 @@ export default async function NuevaReservaPage() {
           {servicesResult.error.message}
         </p>
       ) : (
-        <BookingFlow services={services} timezone={tenant.timezone} />
+        <BookingFlow
+          services={services}
+          timezone={tenant.timezone}
+          actions={panelActions}
+        />
       )}
     </div>
   );

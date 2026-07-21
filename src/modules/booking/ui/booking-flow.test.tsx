@@ -5,34 +5,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { errorState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
 
-import {
-  createBookingAction,
-  getAvailabilityAction,
-  getSlotsAction,
-  listStaffAction,
-} from "../application/actions";
 import type { AvailableSlot, BookableService, BookableStaff } from "../domain/types";
-import { BookingFlow } from "./booking-flow";
+import { BookingFlow, type BookingActions } from "./booking-flow";
 
 /**
- * Characterization test for `BookingFlow` AS IT IS TODAY, written before the
- * planned `BookingActions` prop-injection refactor (p2 task 6.2). It mocks
- * `../application/actions` because the component currently imports the four
- * Server Actions directly (no prop seam yet). The refactor must keep every
- * assertion here green — it only changes WHERE these functions come from,
- * not their signatures or the component's behavior.
+ * Behavioral test for `BookingFlow`. The four data operations are injected via
+ * the `actions` prop (`BookingActions` seam, p2 task 6.2), so the component is
+ * exercised the same way the panel and the public page drive it — without
+ * knowing where tenant resolution happens. These are the characterization
+ * assertions kept green through the prop-injection refactor: only WHERE the
+ * functions come from changed, not their signatures or the component's behavior.
  */
-vi.mock("../application/actions", () => ({
-  listStaffAction: vi.fn(),
-  getAvailabilityAction: vi.fn(),
-  getSlotsAction: vi.fn(),
-  createBookingAction: vi.fn(),
-}));
+const mockListStaff = vi.fn<BookingActions["listStaff"]>();
+const mockGetAvailability = vi.fn<BookingActions["getAvailability"]>();
+const mockGetSlots = vi.fn<BookingActions["getSlots"]>();
+const mockCreateBooking = vi.fn<BookingActions["createBooking"]>();
 
-const mockListStaff = vi.mocked(listStaffAction);
-const mockGetAvailability = vi.mocked(getAvailabilityAction);
-const mockGetSlots = vi.mocked(getSlotsAction);
-const mockCreateBooking = vi.mocked(createBookingAction);
+const actions: BookingActions = {
+  listStaff: mockListStaff,
+  getAvailability: mockGetAvailability,
+  getSlots: mockGetSlots,
+  createBooking: mockCreateBooking,
+};
 
 const TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -87,7 +81,7 @@ async function advanceToCustomerStep(user: ReturnType<typeof userEvent.setup>) {
   mockGetAvailability.mockResolvedValue(ok({ weekdays: [1], windows: [] }));
   mockGetSlots.mockResolvedValue(ok([slotAvailable, slotFull]));
 
-  render(<BookingFlow services={[service]} timezone={TIMEZONE} />);
+  render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
 
   await user.click(screen.getByText("Corte"));
   await user.click(await screen.findByText("Ana"));
@@ -103,7 +97,7 @@ async function advanceToCustomerStep(user: ReturnType<typeof userEvent.setup>) {
 
 describe("BookingFlow", () => {
   it("shows an empty-state message when there are no active services", () => {
-    render(<BookingFlow services={[]} timezone={TIMEZONE} />);
+    render(<BookingFlow services={[]} timezone={TIMEZONE} actions={actions} />);
 
     expect(
       screen.getByText(
@@ -118,7 +112,7 @@ describe("BookingFlow", () => {
     mockGetAvailability.mockResolvedValue(ok({ weekdays: [], windows: [] }));
     const user = userEvent.setup({ delay: null });
 
-    render(<BookingFlow services={[service]} timezone={TIMEZONE} />);
+    render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
 
     expect(screen.getByText(/30 min\s*·\s*\$\s*5\.000/)).toBeInTheDocument();
 
@@ -134,7 +128,7 @@ describe("BookingFlow", () => {
     );
     const user = userEvent.setup({ delay: null });
 
-    render(<BookingFlow services={[service]} timezone={TIMEZONE} />);
+    render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
     await user.click(screen.getByText("Corte"));
 
     expect(
@@ -147,7 +141,7 @@ describe("BookingFlow", () => {
     mockGetAvailability.mockResolvedValue(ok({ weekdays: [], windows: [] }));
     const user = userEvent.setup({ delay: null });
 
-    render(<BookingFlow services={[service]} timezone={TIMEZONE} />);
+    render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
     await user.click(screen.getByText("Corte"));
     await user.click(await screen.findByText("Ana"));
 
@@ -228,7 +222,7 @@ describe("BookingFlow", () => {
     mockListStaff.mockResolvedValue(ok([staffMember]));
     const user = userEvent.setup({ delay: null });
 
-    render(<BookingFlow services={[service]} timezone={TIMEZONE} />);
+    render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
     await user.click(screen.getByText("Corte"));
     await screen.findByText("Ana");
 
