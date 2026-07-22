@@ -3,7 +3,15 @@ import Link from "next/link";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
-import { CalendarDays, Clock, LogOut, Plus, Scissors, Wallet } from "lucide-react";
+import {
+  CalendarDays,
+  Clock,
+  LogOut,
+  Plus,
+  Scissors,
+  Users,
+  Wallet,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -91,6 +99,13 @@ export default async function PanelPage() {
           >
             <Scissors className="size-4" />
             Servicios
+          </Link>
+          <Link
+            href="/panel/profesionales"
+            className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
+          >
+            <Users className="size-4" />
+            Profesionales
           </Link>
           <Link
             href="/panel/nueva-reserva"
