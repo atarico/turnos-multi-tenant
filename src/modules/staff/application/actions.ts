@@ -7,7 +7,9 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
+import { buildWeeklySchedule } from "../domain/schedule";
 import { staffFormSchema } from "../domain/schemas";
+import { getStaffMember } from "./queries";
 
 /**
  * Server Actions de profesionales.
@@ -226,4 +228,80 @@ export async function deleteStaffAction(
 
   revalidateStaff(tenant);
   return { status: "success", message: "Profesional eliminado." };
+}
+
+/**
+ * Guarda el horario semanal completo de un profesional.
+ *
+ * Se reemplaza la semana entera (borrar + insertar) en vez de reconciliar
+ * franja por franja: las filas de `staff_availability` no tienen identidad
+ * estable para el usuario — nadie edita "la franja 3", edita "el horario".
+ *
+ * El hueco conocido: entre el DELETE y el INSERT el profesional queda un
+ * instante sin horario, y si el INSERT falla se queda sin él. Se avisa con un
+ * mensaje explícito en vez de fingir que no pasó. La solución definitiva es una
+ * función SECURITY DEFINER que haga las dos cosas en una transacción, como
+ * `create_booking`; queda anotado para cuando duela.
+ */
+export async function saveScheduleAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const staffId = String(formData.get("staffId") ?? "").trim();
+  if (!staffId) return errorState("No pudimos identificar al profesional.");
+
+  const tenant = await getCurrentTenant();
+  if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
+
+  // Guard de aislamiento: el staffId viene del cliente.
+  const member = await getStaffMember(tenant.id, staffId);
+  if (!member.ok) return errorState(member.error.message);
+
+  const weekdays = formData.getAll("weekday").map(String);
+  const starts = formData.getAll("startTime").map(String);
+  const ends = formData.getAll("endTime").map(String);
+
+  if (weekdays.length !== starts.length || weekdays.length !== ends.length) {
+    return errorState("El horario llegó incompleto. Volvé a intentar.");
+  }
+
+  const schedule = buildWeeklySchedule(
+    weekdays.map((weekday, i) => ({
+      weekday,
+      startTime: starts[i],
+      endTime: ends[i],
+    })),
+  );
+  if (!schedule.ok) return errorState(schedule.error.message);
+
+  const supabase = await createClient();
+  const { error: deleteError } = await supabase
+    .from("staff_availability")
+    .delete()
+    .eq("staff_id", staffId);
+
+  if (deleteError) {
+    return errorState("No pudimos actualizar el horario. Intentá de nuevo.");
+  }
+
+  if (schedule.value.length > 0) {
+    const { error: insertError } = await supabase.from("staff_availability").insert(
+      schedule.value.map((w) => ({
+        staff_id: staffId,
+        weekday: w.weekday,
+        start_time: w.startTime,
+        end_time: w.endTime,
+      })),
+    );
+
+    if (insertError) {
+      return errorState(
+        "Borramos el horario anterior pero no pudimos guardar el nuevo. Cargalo de nuevo.",
+      );
+    }
+  }
+
+  revalidateStaff(tenant);
+  revalidatePath(`/panel/profesionales/${staffId}/horarios`);
+  return { status: "success", message: "Horario guardado." };
 }

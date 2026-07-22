@@ -97,6 +97,22 @@ describe("StaffList", () => {
     expect(screen.getByText(/Sin servicios asignados/)).toBeInTheDocument();
   });
 
+  it("links each professional to their weekly schedule", () => {
+    render(
+      <StaffList
+        members={[member]}
+        services={services}
+        onEdit={vi.fn()}
+        actions={makeActions()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Horarios" })).toHaveAttribute(
+      "href",
+      "/panel/profesionales/st1/horarios",
+    );
+  });
+
   it("marks an inactive professional as paused and offers to reactivate", () => {
     render(
       <StaffList

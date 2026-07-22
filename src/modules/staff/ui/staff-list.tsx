@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -110,6 +111,12 @@ function StaffRow({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href={`/panel/profesionales/${member.id}/horarios`}
+            className="inline-flex h-9 items-center rounded-xl px-3.5 text-sm font-medium tracking-tight text-muted transition-colors hover:bg-surface hover:text-foreground"
+          >
+            Horarios
+          </Link>
           <Button
             type="button"
             variant="secondary"
