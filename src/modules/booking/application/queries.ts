@@ -2,9 +2,11 @@ import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 
 import type {
+  AgendaBooking,
   BookableService,
   BookableStaff,
   BookingLoad,
+  BookingStatus,
   WeeklyAvailability,
 } from "../domain/types";
 
@@ -149,6 +151,54 @@ export async function getStaffAvailability(
       endTime: r.end_time,
     })),
   );
+}
+
+interface AgendaBookingRow {
+  id: string;
+  customer_name: string;
+  customer_phone: string | null;
+  starts_at: string;
+  ends_at: string;
+  status: BookingStatus;
+  // Embeds a-uno vía las FK de bookings; PostgREST los devuelve como objeto.
+  services: { name: string } | null;
+  staff: { name: string } | null;
+}
+
+const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
+  id: r.id,
+  customerName: r.customer_name,
+  customerPhone: r.customer_phone,
+  serviceName: r.services?.name ?? "—",
+  staffName: r.staff?.name ?? "—",
+  startsAt: r.starts_at,
+  endsAt: r.ends_at,
+  status: r.status,
+});
+
+/**
+ * Próximos turnos del negocio: 'pending'/'confirmed' desde ahora, del más
+ * cercano al más lejano. Embebe el nombre de servicio y profesional en la
+ * misma consulta para pintar la agenda sin N+1.
+ */
+export async function listUpcomingBookings(
+  tenantId: string,
+): Promise<Result<AgendaBooking[]>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("bookings")
+    .select(
+      "id, customer_name, customer_phone, starts_at, ends_at, status, services(name), staff(name)",
+    )
+    .eq("tenant_id", tenantId)
+    .in("status", ["pending", "confirmed"])
+    .gte("starts_at", new Date().toISOString())
+    .order("starts_at");
+
+  if (error) {
+    return err(appError("bookings_query_failed", "No pudimos cargar los turnos."));
+  }
+  return ok((data as unknown as AgendaBookingRow[]).map(toAgendaBooking));
 }
 
 /**

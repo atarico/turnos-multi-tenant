@@ -1,14 +1,33 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { TZDate } from "@date-fns/tz";
+import { format } from "date-fns";
+import { es } from "date-fns/locale";
 import { CalendarDays, Clock, LogOut, Plus, Wallet } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { signOutAction } from "@/modules/auth/application/actions";
+import { listUpcomingBookings } from "@/modules/booking/application/queries";
+import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 import { OnboardingForm } from "@/modules/tenants/ui/onboarding-form";
+
+/** Instante ISO → "YYYY-MM-DD" civil en la tz del negocio. */
+function civilDay(iso: string | number, timezone: string): string {
+  return format(new TZDate(new Date(iso).getTime(), timezone), "yyyy-MM-dd");
+}
+
+/**
+ * "Hoy" civil en la tz del negocio. Aislado en su propia función porque leer
+ * el reloj es request-time: legítimo en un Server Component (render dinámico),
+ * pero no debe vivir en el cuerpo "puro" del componente.
+ */
+function todayInTz(timezone: string): string {
+  return civilDay(Date.now(), timezone);
+}
 
 export const metadata: Metadata = { title: "Panel" };
 
@@ -35,6 +54,21 @@ export default async function PanelPage() {
       </div>
     );
   }
+
+  const bookingsResult = await listUpcomingBookings(tenant.id);
+  const bookings = bookingsResult.ok ? bookingsResult.value : [];
+
+  const todayStr = todayInTz(tenant.timezone);
+  const turnosHoy = bookings.filter(
+    (b) => civilDay(b.startsAt, tenant.timezone) === todayStr,
+  ).length;
+  const proximoTurno = bookings[0]
+    ? format(
+        new TZDate(new Date(bookings[0].startsAt).getTime(), tenant.timezone),
+        "d MMM, HH:mm",
+        { locale: es },
+      )
+    : "—";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
@@ -67,24 +101,33 @@ export default async function PanelPage() {
         </div>
       </header>
 
-      {/* Métricas — placeholders que se activan en las próximas fases. */}
       <section className="mt-8 grid gap-4 sm:grid-cols-3">
-        <MetricCard icon={<CalendarDays className="size-5" />} label="Turnos hoy" value="0" />
+        <MetricCard
+          icon={<CalendarDays className="size-5" />}
+          label="Turnos hoy"
+          value={String(turnosHoy)}
+        />
+        {/* Ingresos: pendiente de agregación de precios (próxima iteración). */}
         <MetricCard icon={<Wallet className="size-5" />} label="Ingresos del mes" value="$0" />
-        <MetricCard icon={<Clock className="size-5" />} label="Próximo turno" value="—" />
+        <MetricCard
+          icon={<Clock className="size-5" />}
+          label="Próximo turno"
+          value={proximoTurno}
+        />
       </section>
 
-      <Card className="mt-4 p-6">
-        <h2 className="font-display text-lg font-semibold tracking-tight">
-          El cimiento está listo ✓
+      <section className="mt-8">
+        <h2 className="mb-3 font-display text-lg font-semibold tracking-tight">
+          Próximos turnos
         </h2>
-        <p className="mt-2 max-w-prose text-sm leading-relaxed text-muted">
-          Autenticación, multi-tenant con RLS y tu negocio aislado de los demás.
-          Lo que sigue: <strong className="text-foreground">servicios y calendario</strong>{" "}
-          (Fase 2), <strong className="text-foreground">pagos</strong> según tu país
-          (Fase 3) y el resto del dashboard.
-        </p>
-      </Card>
+        {!bookingsResult.ok ? (
+          <p className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">
+            {bookingsResult.error.message}
+          </p>
+        ) : (
+          <AgendaList bookings={bookings} timezone={tenant.timezone} />
+        )}
+      </section>
     </div>
   );
 }
