@@ -13,21 +13,18 @@ import {
   User,
 } from "lucide-react";
 
+import { type ActionState } from "@/core/action";
+import { type Result } from "@/core/result";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils/cn";
 
-import {
-  createBookingAction,
-  getAvailabilityAction,
-  getSlotsAction,
-  listStaffAction,
-} from "../application/actions";
 import { customerSchema, type CustomerInput } from "../domain/schemas";
 import type {
   AvailableSlot,
   BookableService,
   BookableStaff,
+  WeeklyAvailability,
 } from "../domain/types";
 import { BookingCalendar } from "./booking-calendar";
 import { CustomerForm } from "./customer-form";
@@ -48,10 +45,31 @@ const EMPTY_CUSTOMER: CustomerInput = {
   customer_phone: "",
 };
 
+/**
+ * Contrato de datos que el flujo necesita, inyectado por prop. El panel pasa
+ * las Server Actions autenticadas (`actions.ts`); la página pública pasa las
+ * anónimas (`public-actions.ts`) ya curriadas con su slug. El componente no
+ * sabe de sesión ni de tenant: sólo orquesta los pasos y pinta el resultado.
+ */
+export interface BookingActions {
+  listStaff(serviceId: string): Promise<Result<BookableStaff[]>>;
+  getAvailability(
+    staffId: string,
+  ): Promise<Result<{ weekdays: number[]; windows: WeeklyAvailability[] }>>;
+  getSlots(
+    serviceId: string,
+    staffId: string,
+    dateStr: string,
+  ): Promise<Result<AvailableSlot[]>>;
+  createBooking(input: unknown): Promise<ActionState>;
+}
+
 interface BookingFlowProps {
   services: BookableService[];
   /** Timezone del negocio: el calendario la usa para calcular "hoy". */
   timezone: string;
+  /** Origen de datos del flujo: panel (autenticado) o página pública (slug). */
+  actions: BookingActions;
 }
 
 /** Instante ISO → "YYYY-MM-DD" en campos civiles locales (sin desfase de tz). */
@@ -81,7 +99,7 @@ function formatPrice(cents: number, currency: string): string {
  * validación definitiva de cupo/horario la hace `create_booking()` al confirmar;
  * acá surfaceamos su error si la franja se ocupó mientras tanto.
  */
-export function BookingFlow({ services, timezone }: BookingFlowProps) {
+export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
   const [step, setStep] = useState<Step>("service");
 
   const [service, setService] = useState<BookableService | null>(null);
@@ -114,7 +132,7 @@ export function BookingFlow({ services, timezone }: BookingFlowProps) {
     setStep("staff");
 
     setStaffLoading(true);
-    const res = await listStaffAction(next.id);
+    const res = await actions.listStaff(next.id);
     setStaffLoading(false);
     if (!res.ok) {
       setStepError(res.error.message);
@@ -133,7 +151,7 @@ export function BookingFlow({ services, timezone }: BookingFlowProps) {
     setStep("schedule");
 
     setScheduleLoading(true);
-    const res = await getAvailabilityAction(next.id);
+    const res = await actions.getAvailability(next.id);
     setScheduleLoading(false);
     if (!res.ok) {
       setStepError(res.error.message);
@@ -149,7 +167,7 @@ export function BookingFlow({ services, timezone }: BookingFlowProps) {
     if (!next || !service || !staff) return;
 
     setSlotsLoading(true);
-    const res = await getSlotsAction(service.id, staff.id, toDateStr(next));
+    const res = await actions.getSlots(service.id, staff.id, toDateStr(next));
     setSlotsLoading(false);
     if (!res.ok) {
       setStepError(res.error.message);
@@ -180,7 +198,7 @@ export function BookingFlow({ services, timezone }: BookingFlowProps) {
 
     setSubmitting(true);
     setStepError(null);
-    const result = await createBookingAction({
+    const result = await actions.createBooking({
       service_id: service.id,
       staff_id: staff.id,
       starts_at: slot.startsAt,

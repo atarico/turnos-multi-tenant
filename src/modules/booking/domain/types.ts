@@ -53,6 +53,31 @@ export interface BookingLoad {
   endsAt: string;
 }
 
+/** Estados posibles de un turno (espeja el enum `booking_status` de la base). */
+export type BookingStatus =
+  | "pending"
+  | "confirmed"
+  | "cancelled"
+  | "completed"
+  | "no_show";
+
+/**
+ * Un turno tal como lo muestra la agenda del panel: con nombre de cliente,
+ * servicio y profesional ya resueltos, más el estado. Lo consume la vista
+ * del dueño; NO expone datos internos que no se pinten.
+ */
+export interface AgendaBooking {
+  id: string;
+  customerName: string;
+  customerPhone: string | null;
+  serviceName: string;
+  staffName: string;
+  /** Instante ISO (UTC) de inicio / fin. */
+  startsAt: string;
+  endsAt: string;
+  status: BookingStatus;
+}
+
 /**
  * Una franja candidata para reservar, ya resuelta a instantes absolutos.
  * `available` decide QUÉ MOSTRAR habilitado; la validación autoritativa la

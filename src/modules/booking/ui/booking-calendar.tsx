@@ -5,6 +5,7 @@ import "react-day-picker/style.css";
 import { type CSSProperties, useState } from "react";
 import { TZDate } from "@date-fns/tz";
 import { es } from "date-fns/locale";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DayPicker, type Matcher } from "react-day-picker";
 
 import { cn } from "@/lib/utils/cn";
@@ -19,13 +20,38 @@ interface BookingCalendarProps {
   timezone: string;
 }
 
+const navButton = cn(
+  "inline-flex size-8 items-center justify-center rounded-lg border border-border",
+  "text-muted transition-colors hover:border-gold/40 hover:text-gold",
+  "disabled:pointer-events-none disabled:opacity-30",
+);
+
+// El botón de cada día. Los estados (seleccionado, hoy, deshabilitado) los
+// marca react-day-picker v10 con `data-*` en el <td> padre; los targeteamos con
+// variantes arbitrarias en lugar de pelear con la especificidad del CSS default.
+const dayButton = cn(
+  "inline-flex size-10 items-center justify-center rounded-xl text-sm font-medium text-foreground",
+  "transition-colors hover:bg-surface-2",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40",
+  // Hoy (cuando NO está seleccionado): acento dorado sutil.
+  "[[data-today=true]:not([data-selected=true])_&]:text-gold-bright",
+  "[[data-today=true]:not([data-selected=true])_&]:font-semibold",
+  // Seleccionado: pill dorada sólida con leve glow.
+  "[[data-selected=true]_&]:bg-gold [[data-selected=true]_&]:text-on-gold",
+  "[[data-selected=true]_&]:font-semibold",
+  "[[data-selected=true]_&]:shadow-[0_4px_16px_-6px_rgba(227,178,60,0.6)]",
+  "[[data-selected=true]_&]:hover:bg-gold-bright",
+);
+
 /**
  * Calendario interactivo (react-day-picker v10) con estética dark premium.
  * Deshabilita el pasado y los días de la semana sin disponibilidad del
  * profesional. La accesibilidad (teclado, ARIA) la aporta react-day-picker.
  *
- * El tema dorado se aplica sobreescribiendo las CSS variables `--rdp-*`; el
- * layout base viene del stylesheet importado arriba.
+ * El tamaño y el espaciado de las celdas se fijan por `classNames` (Tailwind),
+ * NO por el stylesheet del paquete: su dimensionado no sobrevive al reset de
+ * Tailwind y dejaba la grilla comprimida. Sólo conservamos dos variables
+ * `--rdp-*` para neutralizar el borde/acento por defecto del día seleccionado.
  */
 export function BookingCalendar({
   selected,
@@ -53,20 +79,15 @@ export function BookingCalendar({
     (date: Date) => !openDays.has(date.getDay()),
   ];
 
-  // Tema dorado sobre las variables de react-day-picker.
+  // Neutraliza el borde y el agrandado del día seleccionado que trae el CSS
+  // default; el relleno dorado lo pone `dayButton`.
   const theme = {
     "--rdp-accent-color": "var(--color-gold)",
-    "--rdp-accent-background-color": "color-mix(in oklab, var(--color-gold) 18%, transparent)",
-    "--rdp-today-color": "var(--color-gold-bright)",
-    "--rdp-day_button-border-radius": "0.75rem",
-    "--rdp-day-width": "2.5rem",
-    "--rdp-day-height": "2.5rem",
-    "--rdp-day_button-width": "2.5rem",
-    "--rdp-day_button-height": "2.5rem",
+    "--rdp-selected-border": "0",
   } as CSSProperties;
 
   return (
-    <div style={theme} className="text-foreground">
+    <div style={theme} className="w-fit text-foreground">
       <DayPicker
         mode="single"
         selected={selected}
@@ -76,29 +97,32 @@ export function BookingCalendar({
         weekStartsOn={1}
         showOutsideDays
         startMonth={today}
+        components={{
+          Chevron: ({ orientation }) =>
+            orientation === "left" ? (
+              <ChevronLeft className="size-4" />
+            ) : (
+              <ChevronRight className="size-4" />
+            ),
+        }}
         classNames={{
           months: "relative",
-          month_caption: "flex items-center h-11 px-1",
-          caption_label: "font-display text-base font-semibold tracking-tight capitalize",
-          nav: "absolute right-1 top-0 flex items-center gap-1 h-11",
-          button_previous: cn(
-            "inline-flex size-9 items-center justify-center rounded-lg border border-border",
-            "text-muted transition-colors hover:border-gold/40 hover:text-foreground",
-          ),
-          button_next: cn(
-            "inline-flex size-9 items-center justify-center rounded-lg border border-border",
-            "text-muted transition-colors hover:border-gold/40 hover:text-foreground",
-          ),
-          weekday: "text-xs font-medium text-faint",
-          day: "text-sm",
-          day_button: cn(
-            "font-medium text-foreground transition-colors",
-            "hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold/40",
-          ),
-          today: "text-gold-bright font-semibold",
-          selected: "text-on-gold",
-          disabled: "text-faint opacity-40",
-          outside: "text-faint/60",
+          month: "space-y-3",
+          month_caption: "flex h-9 items-center",
+          caption_label:
+            "font-display text-base font-semibold tracking-tight capitalize",
+          nav: "absolute right-0 top-0 flex h-9 items-center gap-1",
+          button_previous: navButton,
+          button_next: navButton,
+          month_grid: "w-full border-separate border-spacing-1",
+          weekdays: "",
+          weekday:
+            "pb-2 text-[0.7rem] font-semibold uppercase tracking-widest text-faint",
+          week: "",
+          // Celda: alto fijo para alinear también los días deshabilitados
+          // (que NO renderizan botón, sólo texto atenuado).
+          day: "h-10 p-0 text-center align-middle text-sm text-faint/30",
+          day_button: dayButton,
         }}
       />
     </div>
