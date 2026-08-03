@@ -42,15 +42,17 @@ export function parsePriceToCents(input: string): number | null {
 
   const digits = wholePart.replace(/[.,]/g, "");
   if (!/^\d+$/.test(digits)) return null;
-  // Un separador que no es decimal tiene que agrupar de a tres: "10,505" no es
-  // ni un monto con miles ni uno con decimales — es un error de tipeo.
+  // Un separador que no es decimal tiene que agrupar de a tres: "10,5055" no
+  // es ni un monto con miles ni uno con decimales — es un error de tipeo.
+  // Ojo: "10,505" SÍ es válido (diez mil quinientos cinco), porque "505"
+  // agrupa de a tres. La regla mira el tamaño del grupo, no el separador.
   if (!isDecimal && !isGroupedByThousands(wholePart)) return null;
 
   const cents = Number(digits) * 100 + Number(fraction);
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
-/** "1.234.567" → true; "10,505" → false. Sin separadores, también true. */
+/** "1.234.567" → true; "10,5055" → false. Sin separadores, también true. */
 function isGroupedByThousands(value: string): boolean {
   const groups = value.split(/[.,]/);
   if (groups.length === 1) return true;

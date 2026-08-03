@@ -54,6 +54,8 @@ describe("parsePriceToCents", () => {
 
   it("rejects a separator that does not group by three", () => {
     expect(parsePriceToCents("1.5000")).toBeNull();
+    // Cuatro cifras al final no son ni miles ni decimales: error de tipeo.
+    expect(parsePriceToCents("10,5055")).toBeNull();
   });
 });
 

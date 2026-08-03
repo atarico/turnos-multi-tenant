@@ -18,6 +18,7 @@ import { type Result } from "@/core/result";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils/cn";
+import { formatPrice } from "@/modules/catalog/domain/money";
 
 import { customerSchema, type CustomerInput } from "../domain/schemas";
 import type {
@@ -78,18 +79,6 @@ function toDateStr(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-function formatPrice(cents: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat("es-AR", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 0,
-    }).format(cents / 100);
-  } catch {
-    return `${(cents / 100).toFixed(0)} ${currency}`;
-  }
 }
 
 /**
