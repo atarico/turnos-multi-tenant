@@ -233,15 +233,14 @@ export async function deleteStaffAction(
 /**
  * Guarda el horario semanal completo de un profesional.
  *
- * Se reemplaza la semana entera (borrar + insertar) en vez de reconciliar
- * franja por franja: las filas de `staff_availability` no tienen identidad
- * estable para el usuario — nadie edita "la franja 3", edita "el horario".
+ * Se reemplaza la semana entera en vez de reconciliar franja por franja: las
+ * filas de `staff_availability` no tienen identidad estable para el usuario —
+ * nadie edita "la franja 3", edita "el horario".
  *
- * El hueco conocido: entre el DELETE y el INSERT el profesional queda un
- * instante sin horario, y si el INSERT falla se queda sin él. Se avisa con un
- * mensaje explícito en vez de fingir que no pasó. La solución definitiva es una
- * función SECURITY DEFINER que haga las dos cosas en una transacción, como
- * `create_booking`; queda anotado para cuando duela.
+ * El reemplazo lo hace `replace_staff_schedule` (SECURITY DEFINER, estilo
+ * `create_booking`) en UNA transacción: si algo falla, la semana anterior
+ * queda intacta. Antes era DELETE + INSERT en dos llamadas y un fallo en la
+ * segunda dejaba al profesional sin horario.
  */
 export async function saveScheduleAction(
   _prev: ActionState,
@@ -275,30 +274,17 @@ export async function saveScheduleAction(
   if (!schedule.ok) return errorState(schedule.error.message);
 
   const supabase = await createClient();
-  const { error: deleteError } = await supabase
-    .from("staff_availability")
-    .delete()
-    .eq("staff_id", staffId);
+  const { error } = await supabase.rpc("replace_staff_schedule", {
+    p_staff_id: staffId,
+    p_windows: schedule.value.map((w) => ({
+      weekday: w.weekday,
+      start_time: w.startTime,
+      end_time: w.endTime,
+    })),
+  });
 
-  if (deleteError) {
-    return errorState("No pudimos actualizar el horario. Intentá de nuevo.");
-  }
-
-  if (schedule.value.length > 0) {
-    const { error: insertError } = await supabase.from("staff_availability").insert(
-      schedule.value.map((w) => ({
-        staff_id: staffId,
-        weekday: w.weekday,
-        start_time: w.startTime,
-        end_time: w.endTime,
-      })),
-    );
-
-    if (insertError) {
-      return errorState(
-        "Borramos el horario anterior pero no pudimos guardar el nuevo. Cargalo de nuevo.",
-      );
-    }
+  if (error) {
+    return errorState("No pudimos guardar el horario. Intentá de nuevo.");
   }
 
   revalidateStaff(tenant);
