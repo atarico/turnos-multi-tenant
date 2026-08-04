@@ -7,11 +7,19 @@ import { Card } from "@/components/ui/card";
 
 import { describeBookingStatus } from "../domain/booking-status";
 import type { AgendaBooking } from "../domain/types";
+import { BookingLifecycleActions } from "./booking-lifecycle-actions";
 
 interface AgendaListProps {
   bookings: AgendaBooking[];
   /** Timezone del negocio: la hora se muestra local, no en UTC. */
   timezone: string;
+  /** Texto del estado vacío, según qué lista se esté pintando. */
+  emptyMessage?: string;
+  /**
+   * Si se muestran los botones de ciclo de vida (confirmar, cerrar, mover).
+   * Apagado por defecto: la lista sigue sirviendo como vista de sólo lectura.
+   */
+  withActions?: boolean;
 }
 
 /** Instante ISO → fecha y hora civiles en la tz del negocio. */
@@ -28,13 +36,16 @@ function formatWhen(iso: string, timezone: string): { day: string; time: string 
  * ruta le pasa los turnos ya resueltos y la timezone; acá sólo se formatea y
  * se pinta. La hora va SIEMPRE en la tz del negocio.
  */
-export function AgendaList({ bookings, timezone }: AgendaListProps) {
+export function AgendaList({
+  bookings,
+  timezone,
+  emptyMessage = "Todavía no tenés turnos próximos. Cuando alguien reserve, aparecen acá.",
+  withActions = false,
+}: AgendaListProps) {
   if (bookings.length === 0) {
     return (
       <Card className="p-8 text-center">
-        <p className="text-sm text-muted">
-          Todavía no tenés turnos próximos. Cuando alguien reserve, aparecen acá.
-        </p>
+        <p className="text-sm text-muted">{emptyMessage}</p>
       </Card>
     );
   }
@@ -46,7 +57,7 @@ export function AgendaList({ bookings, timezone }: AgendaListProps) {
         const status = describeBookingStatus(b.status);
         return (
           <li key={b.id}>
-            <Card className="flex items-center justify-between gap-4 p-4">
+            <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
               <div className="flex min-w-0 items-center gap-4">
                 <div className="w-16 shrink-0 text-center">
                   <p className="text-xs capitalize tracking-wide text-muted">
@@ -65,7 +76,10 @@ export function AgendaList({ bookings, timezone }: AgendaListProps) {
                   </p>
                 </div>
               </div>
-              <Badge variant={status.tone}>{status.label}</Badge>
+              <div className="flex items-center gap-3">
+                <Badge variant={status.tone}>{status.label}</Badge>
+                {withActions && <BookingLifecycleActions booking={b} />}
+              </div>
             </Card>
           </li>
         );

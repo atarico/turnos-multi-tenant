@@ -79,6 +79,16 @@ export interface AgendaBooking {
 }
 
 /**
+ * Un turno con las referencias que la agenda no necesita pintar pero sí hacen
+ * falta para OPERAR sobre él: reprogramarlo exige saber qué servicio define la
+ * duración y qué profesional lo atiende hoy.
+ */
+export interface BookingDetail extends AgendaBooking {
+  serviceId: string;
+  staffId: string;
+}
+
+/**
  * Una franja candidata para reservar, ya resuelta a instantes absolutos.
  * `available` decide QUÉ MOSTRAR habilitado; la validación autoritativa la
  * hace `create_booking()` en la base al confirmar.

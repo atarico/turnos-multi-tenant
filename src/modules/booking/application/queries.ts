@@ -5,6 +5,7 @@ import type {
   AgendaBooking,
   BookableService,
   BookableStaff,
+  BookingDetail,
   BookingLoad,
   BookingStatus,
   WeeklyAvailability,
@@ -165,6 +166,22 @@ interface AgendaBookingRow {
   staff: { name: string } | null;
 }
 
+interface BookingDetailRow extends AgendaBookingRow {
+  service_id: string;
+  staff_id: string;
+}
+
+/**
+ * Estados que ocupan la agenda. Fuente única: el motor los usa para contar cupo
+ * (`create_booking`, `reschedule_booking`), y acá para decidir qué turnos siguen
+ * pidiendo una decisión del negocio.
+ */
+const LIVE_STATUSES: BookingStatus[] = ["pending", "confirmed"];
+
+/** Columnas del turno tal como las pinta la agenda. */
+const AGENDA_COLUMNS =
+  "id, customer_name, customer_phone, starts_at, ends_at, status, services(name), staff(name)";
+
 const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   id: r.id,
   customerName: r.customer_name,
@@ -187,11 +204,9 @@ export async function listUpcomingBookings(
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("bookings")
-    .select(
-      "id, customer_name, customer_phone, starts_at, ends_at, status, services(name), staff(name)",
-    )
+    .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
-    .in("status", ["pending", "confirmed"])
+    .in("status", LIVE_STATUSES)
     .gte("starts_at", new Date().toISOString())
     .order("starts_at");
 
@@ -199,6 +214,70 @@ export async function listUpcomingBookings(
     return err(appError("bookings_query_failed", "No pudimos cargar los turnos."));
   }
   return ok((data as unknown as AgendaBookingRow[]).map(toAgendaBooking));
+}
+
+/**
+ * Turnos VENCIDOS que siguen vivos: ya terminaron pero nadie dijo si el cliente
+ * vino, no vino, o si se canceló.
+ *
+ * Existen porque la agenda de próximos turnos filtra `starts_at >= now()`: al
+ * pasar la hora, el turno desaparecía de la vista y su estado quedaba congelado
+ * en 'confirmed' para siempre. Sin esta lista el ciclo de vida no cierra nunca.
+ *
+ * Van del más reciente al más viejo: lo primero que el dueño quiere cerrar es
+ * lo que acaba de pasar.
+ */
+export async function listBookingsToClose(
+  tenantId: string,
+): Promise<Result<AgendaBooking[]>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("bookings")
+    .select(AGENDA_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .in("status", LIVE_STATUSES)
+    .lt("ends_at", new Date().toISOString())
+    .order("starts_at", { ascending: false });
+
+  if (error) {
+    return err(
+      appError("bookings_query_failed", "No pudimos cargar los turnos a cerrar."),
+    );
+  }
+  return ok((data as unknown as AgendaBookingRow[]).map(toAgendaBooking));
+}
+
+/**
+ * Un turno del negocio con las referencias necesarias para operarlo.
+ *
+ * El `tenant_id` explícito NO es redundante con la RLS: es el guard que hace
+ * que un id ajeno adivinado devuelva "no existe" en vez de filtrar datos.
+ */
+export async function getBooking(
+  tenantId: string,
+  bookingId: string,
+): Promise<Result<BookingDetail>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("bookings")
+    .select(`${AGENDA_COLUMNS}, service_id, staff_id`)
+    .eq("tenant_id", tenantId)
+    .eq("id", bookingId)
+    .maybeSingle();
+
+  if (error) {
+    return err(appError("booking_query_failed", "No pudimos cargar el turno."));
+  }
+  if (!data) {
+    return err(appError("booking_not_found", "No encontramos ese turno."));
+  }
+
+  const row = data as unknown as BookingDetailRow;
+  return ok({
+    ...toAgendaBooking(row),
+    serviceId: row.service_id,
+    staffId: row.staff_id,
+  });
 }
 
 /**
@@ -216,7 +295,7 @@ export async function getBookingLoad(
     .from("bookings")
     .select("service_id, starts_at, ends_at")
     .eq("staff_id", staffId)
-    .in("status", ["pending", "confirmed"])
+    .in("status", LIVE_STATUSES)
     .lt("starts_at", rangeEndIso)
     .gt("ends_at", rangeStartIso);
 
