@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { errorState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
+import { formatPrice } from "@/modules/catalog/domain/money";
 
 import type { AvailableSlot, BookableService, BookableStaff } from "../domain/types";
 import { BookingFlow, type BookingActions } from "./booking-flow";
@@ -114,12 +115,34 @@ describe("BookingFlow", () => {
 
     render(<BookingFlow services={[service]} timezone={TIMEZONE} actions={actions} />);
 
-    expect(screen.getByText(/30 min\s*·\s*\$\s*5\.000/)).toBeInTheDocument();
+    expect(screen.getByText("30 min · $ 5.000,00")).toBeInTheDocument();
 
     await user.click(screen.getByText("Corte"));
 
     expect(await screen.findByText("Ana")).toBeInTheDocument();
     expect(mockListStaff).toHaveBeenCalledWith("s1");
+  });
+
+  it("shows the cents of a price instead of rounding them away", () => {
+    // $5.000,50 le tiene que llegar al cliente con sus centavos: redondear el
+    // precio que se muestra en la página pública es mostrarle otro número.
+    const withCents: BookableService = { ...service, priceCents: 500050 };
+
+    render(<BookingFlow services={[withCents]} timezone={TIMEZONE} actions={actions} />);
+
+    expect(screen.getByText("30 min · $ 5.000,50")).toBeInTheDocument();
+  });
+
+  it("formats the price the same way the panel does", () => {
+    // Una sola fuente de verdad para el dinero: lo que ve quien reserva y lo
+    // que ve el negocio en el panel salen de la misma función.
+    const withCents: BookableService = { ...service, priceCents: 500050 };
+
+    render(<BookingFlow services={[withCents]} timezone={TIMEZONE} actions={actions} />);
+
+    expect(
+      screen.getByText(`30 min · ${formatPrice(500050, "ARS")}`),
+    ).toBeInTheDocument();
   });
 
   it("surfaces the action's error message when staff fails to load", async () => {
