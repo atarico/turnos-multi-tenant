@@ -61,5 +61,6 @@ describe("AgendaList", () => {
     render(<AgendaList bookings={[booking]} timezone={TIMEZONE} withActions />);
 
     expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Reprogramar/ })).toBeInTheDocument();
   });
 });

@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { idleState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
 
-import { updateBookingStatusAction } from "./booking-lifecycle";
+import {
+  rescheduleBookingAction,
+  updateBookingStatusAction,
+} from "./booking-lifecycle";
 
 /**
  * Tests del ciclo de vida del turno.
  *
- * Una obsesión: que el turno NO se pueda mover a un estado inválido desde un
- * POST armado a mano. Por eso cada guard se prueba comprobando además que la
- * base ni se toca.
+ * Dos operaciones con una misma obsesión: que el turno NO se pueda mover a un
+ * estado inválido ni a una franja inválida desde un POST armado a mano. Por eso
+ * cada guard se prueba comprobando además que la base ni se toca.
  */
 
 const revalidatePath = vi.fn();
@@ -41,8 +44,9 @@ const from = vi.fn(() => ({
   },
 }));
 
+const rpc = vi.fn(async () => ({ error: null as { message: string } | null }));
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ from }),
+  createClient: async () => ({ from, rpc }),
 }));
 
 const getCurrentTenant = vi.fn(async (): Promise<unknown> => ({
@@ -78,9 +82,16 @@ function statusForm(status: string, id = "booking-1"): FormData {
   return form;
 }
 
+function rescheduleForm(fields: Record<string, string>): FormData {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  return form;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   updateError = null;
+  rpc.mockResolvedValue({ error: null });
   getBooking.mockResolvedValue(ok(booking));
   getCurrentTenant.mockResolvedValue({ id: "tenant-1", slug: "negocio" });
 });
@@ -149,5 +160,89 @@ describe("updateBookingStatusAction", () => {
 
     expect(result.status).toBe("error");
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("rescheduleBookingAction", () => {
+  it("mueve el turno vía la RPC, manteniendo al profesional si no cambia", async () => {
+    const result = await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({ id: "booking-1", startsAt: "2026-09-02T13:00:00.000Z" }),
+    );
+
+    expect(result.status).toBe("success");
+    expect(rpc).toHaveBeenCalledWith("reschedule_booking", {
+      p_booking_id: "booking-1",
+      p_starts_at: "2026-09-02T13:00:00.000Z",
+      p_staff_id: null,
+    });
+  });
+
+  it("manda el profesional nuevo cuando el turno cambia de manos", async () => {
+    await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({
+        id: "booking-1",
+        startsAt: "2026-09-02T13:00:00.000Z",
+        staffId: "staff-2",
+      }),
+    );
+
+    expect(rpc).toHaveBeenCalledWith("reschedule_booking", {
+      p_booking_id: "booking-1",
+      p_starts_at: "2026-09-02T13:00:00.000Z",
+      p_staff_id: "staff-2",
+    });
+  });
+
+  it("no mueve un turno ya cerrado, sin tocar la base", async () => {
+    getBooking.mockResolvedValue(ok({ ...booking, status: "cancelled" }));
+
+    const result = await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({ id: "booking-1", startsAt: "2026-09-02T13:00:00.000Z" }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("rechaza una fecha destino que no es un instante válido", async () => {
+    const result = await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({ id: "booking-1", startsAt: "mañana a la tarde" }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("traduce el error de cupo de la RPC a un mensaje accionable", async () => {
+    rpc.mockResolvedValue({
+      error: { message: "ERROR: No quedan lugares en esa franja" },
+    });
+
+    const result = await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({ id: "booking-1", startsAt: "2026-09-02T13:00:00.000Z" }),
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      message: "No quedan lugares en esa franja. Elegí otra.",
+    });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("frena si no hay negocio en la sesión", async () => {
+    getCurrentTenant.mockResolvedValue(null);
+
+    const result = await rescheduleBookingAction(
+      idleState,
+      rescheduleForm({ id: "booking-1", startsAt: "2026-09-02T13:00:00.000Z" }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@ interface AgendaListProps {
   /** Texto del estado vacío, según qué lista se esté pintando. */
   emptyMessage?: string;
   /**
-   * Si se muestran los botones de ciclo de vida (confirmar, cerrar).
+   * Si se muestran los botones de ciclo de vida (confirmar, cerrar, mover).
    * Apagado por defecto: la lista sigue sirviendo como vista de sólo lectura.
    */
   withActions?: boolean;

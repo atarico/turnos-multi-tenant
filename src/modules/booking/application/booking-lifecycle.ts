@@ -6,13 +6,18 @@ import { type ActionState, errorState } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
-import { canTransition, isBookingStatus } from "../domain/booking-transitions";
+import { friendlyRescheduleError } from "../domain/booking-errors";
+import {
+  canReschedule,
+  canTransition,
+  isBookingStatus,
+} from "../domain/booking-transitions";
 import type { BookingStatus } from "../domain/types";
 import { getBooking } from "./queries";
 
 /**
- * Server Actions del CICLO DE VIDA de un turno: cerrarlo como confirmado,
- * completado, no asistió o cancelado.
+ * Server Actions del CICLO DE VIDA de un turno: cerrarlo (confirmado,
+ * completado, no asistió, cancelado) y moverlo en el tiempo.
  *
  * Viven separadas de `actions.ts` (que crea turnos) porque son la otra mitad
  * del ciclo y comparten guards propios: siempre releen el turno desde la base
@@ -80,4 +85,53 @@ export async function updateBookingStatusAction(
 
   revalidateAgenda(tenant.slug);
   return { status: "success", message: DONE_MESSAGES[nextStatus] };
+}
+
+/**
+ * Reprograma un turno vía la RPC `reschedule_booking()`, único camino válido:
+ * mover un turno revalida disponibilidad, solape y cupo con advisory lock, tal
+ * como al crearlo. Un UPDATE suelto desde acá permitiría doble-booking.
+ *
+ * El chequeo de `canReschedule` es un corte temprano con mensaje claro; la
+ * validación autoritativa (incluida la carrera contra otra reserva) la sigue
+ * haciendo la base.
+ */
+export async function rescheduleBookingAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return errorState("No pudimos identificar el turno.");
+
+  const startsAt = String(formData.get("startsAt") ?? "").trim();
+  if (!startsAt || Number.isNaN(Date.parse(startsAt))) {
+    return errorState("Elegí una franja válida para mover el turno.");
+  }
+
+  // Vacío = se queda con el profesional que ya tenía.
+  const staffId = String(formData.get("staffId") ?? "").trim();
+
+  const tenant = await getCurrentTenant();
+  if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
+
+  const current = await getBooking(tenant.id, id);
+  if (!current.ok) return errorState(current.error.message);
+
+  if (!canReschedule(current.value.status)) {
+    return errorState("Ese turno ya está cerrado: no se puede reprogramar.");
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("reschedule_booking", {
+    p_booking_id: id,
+    p_starts_at: startsAt,
+    p_staff_id: staffId ? staffId : null,
+  });
+
+  if (error) {
+    return errorState(friendlyRescheduleError(error.message));
+  }
+
+  revalidateAgenda(tenant.slug);
+  return { status: "success", message: "Turno reprogramado." };
 }
