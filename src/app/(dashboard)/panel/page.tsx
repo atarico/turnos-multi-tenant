@@ -16,7 +16,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { signOutAction } from "@/modules/auth/application/actions";
-import { listUpcomingBookings } from "@/modules/booking/application/queries";
+import {
+  listBookingsToClose,
+  listUpcomingBookings,
+} from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
@@ -63,8 +66,12 @@ export default async function PanelPage() {
     );
   }
 
-  const bookingsResult = await listUpcomingBookings(tenant.id);
+  const [bookingsResult, toCloseResult] = await Promise.all([
+    listUpcomingBookings(tenant.id),
+    listBookingsToClose(tenant.id),
+  ]);
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
+  const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
   const todayStr = todayInTz(tenant.timezone);
   const turnosHoy = bookings.filter(
@@ -138,6 +145,26 @@ export default async function PanelPage() {
         />
       </section>
 
+      {/* Turnos vencidos sin cerrar: van ARRIBA de los próximos porque son los
+          que piden una decisión ahora. Si no hay ninguno, la sección no existe
+          y el panel queda como antes. */}
+      {toClose.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-1 font-display text-lg font-semibold tracking-tight">
+            Turnos a cerrar
+          </h2>
+          <p className="mb-3 text-sm text-muted">
+            Ya pasaron y siguen abiertos. Marcá qué ocurrió para que dejen de
+            figurar acá.
+          </p>
+          <AgendaList
+            bookings={toClose}
+            timezone={tenant.timezone}
+            withActions
+          />
+        </section>
+      )}
+
       <section className="mt-8">
         <h2 className="mb-3 font-display text-lg font-semibold tracking-tight">
           Próximos turnos
@@ -147,7 +174,11 @@ export default async function PanelPage() {
             {bookingsResult.error.message}
           </p>
         ) : (
-          <AgendaList bookings={bookings} timezone={tenant.timezone} />
+          <AgendaList
+            bookings={bookings}
+            timezone={tenant.timezone}
+            withActions
+          />
         )}
       </section>
     </div>

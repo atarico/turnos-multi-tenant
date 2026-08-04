@@ -1,8 +1,12 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AgendaBooking } from "../domain/types";
 import { AgendaList } from "./agenda-list";
+
+vi.mock("../application/booking-lifecycle", () => ({
+  updateBookingStatusAction: vi.fn(),
+}));
 
 const TIMEZONE = "America/Argentina/Buenos_Aires";
 
@@ -35,5 +39,27 @@ describe("AgendaList", () => {
     // La hora se muestra en la tz del negocio, no en UTC.
     expect(screen.getByText("11:30")).toBeInTheDocument();
     expect(screen.getByText("Confirmado")).toBeInTheDocument();
+  });
+
+  // La lista se usa para dos cosas distintas (próximos turnos y turnos a
+  // cerrar), y el vacío tiene que decir algo distinto en cada caso.
+  it("uses the caller's empty message when given one", () => {
+    render(
+      <AgendaList bookings={[]} timezone={TIMEZONE} emptyMessage="Nada que cerrar." />,
+    );
+
+    expect(screen.getByText("Nada que cerrar.")).toBeInTheDocument();
+  });
+
+  it("stays read-only by default: no lifecycle actions", () => {
+    render(<AgendaList bookings={[booking]} timezone={TIMEZONE} />);
+
+    expect(screen.queryByRole("button", { name: "Cancelar" })).toBeNull();
+  });
+
+  it("renders the lifecycle actions when asked to", () => {
+    render(<AgendaList bookings={[booking]} timezone={TIMEZONE} withActions />);
+
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
   });
 });
