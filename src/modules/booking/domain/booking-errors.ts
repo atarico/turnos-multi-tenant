@@ -1,6 +1,7 @@
 /**
- * Traduce los errores crudos de la RPC `create_booking()` a algo accionable
- * para quien reserva.
+ * Traduce los errores crudos de las RPC del motor de turnos
+ * (`create_booking()` y `reschedule_booking()`) a algo accionable para quien
+ * los lee.
  *
  * Fuente ÚNICA de estos mensajes: los usan el panel (autenticado) y la página
  * pública (anónima). La RPC es la misma para los dos, así que el usuario tiene
@@ -10,15 +11,58 @@
  * Compartir esto NO cruza la frontera low-trust / high-trust: esa frontera vive
  * en el acceso a datos y la identidad, no en un mapeo puro de strings.
  */
-export function friendlyBookingError(message: string): string {
+
+/**
+ * Reglas compartidas por crear y reprogramar: las dos operaciones validan
+ * exactamente lo mismo (cupo, solape, disponibilidad, franja pasada), así que
+ * el mensaje tiene que ser idéntico. El ORDEN importa: "profesional no
+ * disponible" y "servicio no disponible" comparten subcadena.
+ */
+const SHARED_RULES: [needle: string, message: string][] = [
+  ["no quedan lugares", "No quedan lugares en esa franja. Elegí otra."],
+  ["ya tiene un turno", "El profesional ya tiene un turno en ese horario."],
+  ["no atiende", "El profesional no atiende en ese horario."],
+  ["ya pasó", "Esa franja ya pasó. Elegí otra."],
+  ["no ofrece", "Ese profesional no ofrece este servicio."],
+  ["profesional no disponible", "El profesional no está disponible."],
+  ["servicio no disponible", "El servicio no está disponible."],
+  ["negocio inexistente", "No encontramos ese negocio."],
+];
+
+/** Errores que sólo puede tirar `reschedule_booking()`. */
+const RESCHEDULE_RULES: [needle: string, message: string][] = [
+  ["turno inexistente", "No encontramos ese turno."],
+  ["ya está cerrado", "Ese turno ya está cerrado: no se puede reprogramar."],
+];
+
+function translate(
+  message: string,
+  rules: [needle: string, message: string][],
+  fallback: string,
+): string {
   const m = message.toLowerCase();
-  if (m.includes("no quedan lugares")) return "No quedan lugares en esa franja. Elegí otra.";
-  if (m.includes("ya tiene un turno")) return "El profesional ya tiene un turno en ese horario.";
-  if (m.includes("no atiende")) return "El profesional no atiende en ese horario.";
-  if (m.includes("ya pasó")) return "Esa franja ya pasó. Elegí otra.";
-  if (m.includes("no ofrece")) return "Ese profesional no ofrece este servicio.";
-  if (m.includes("profesional no disponible")) return "El profesional no está disponible.";
-  if (m.includes("servicio no disponible")) return "El servicio no está disponible.";
-  if (m.includes("negocio inexistente")) return "No encontramos ese negocio.";
-  return "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.";
+  for (const [needle, friendly] of rules) {
+    if (m.includes(needle)) return friendly;
+  }
+  return fallback;
+}
+
+export function friendlyBookingError(message: string): string {
+  return translate(
+    message,
+    SHARED_RULES,
+    "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
+  );
+}
+
+/**
+ * Mismo mapeo que al crear, más los errores propios de mover un turno. Las
+ * reglas específicas van PRIMERO: son las más precisas.
+ */
+export function friendlyRescheduleError(message: string): string {
+  return translate(
+    message,
+    [...RESCHEDULE_RULES, ...SHARED_RULES],
+    "No pudimos reprogramar el turno. Intentá de nuevo.",
+  );
 }

@@ -59,6 +59,15 @@ describe("BookingLifecycleActions", () => {
     );
   });
 
+  it("deja reprogramar un turno vivo, apuntando a ese turno", () => {
+    render(<BookingLifecycleActions booking={withStatus("confirmed")} />);
+
+    expect(screen.getByRole("link", { name: /Reprogramar/ })).toHaveAttribute(
+      "href",
+      "/panel/turnos/b1/reprogramar",
+    );
+  });
+
   it.each<BookingStatus>(["cancelled", "completed", "no_show"])(
     "no renderiza ninguna acción para un turno %s",
     (status) => {
@@ -67,6 +76,7 @@ describe("BookingLifecycleActions", () => {
       );
 
       expect(container).toBeEmptyDOMElement();
+      expect(screen.queryByRole("link", { name: /Reprogramar/ })).toBeNull();
     },
   );
 });

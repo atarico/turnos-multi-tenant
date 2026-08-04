@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { friendlyBookingError } from "./booking-errors";
+import { friendlyBookingError, friendlyRescheduleError } from "./booking-errors";
 
 describe("friendlyBookingError", () => {
   it.each([
@@ -40,6 +40,32 @@ describe("friendlyBookingError", () => {
   it("prefers the staff message when both staff and service wording appear", () => {
     expect(friendlyBookingError("profesional no disponible; servicio no disponible")).toBe(
       "El profesional no está disponible.",
+    );
+  });
+});
+
+describe("friendlyRescheduleError", () => {
+  // Mover un turno revalida lo MISMO que crearlo, así que comparte los
+  // mensajes de cupo, solape y horario. Sólo cambia el desenlace.
+  it.each([
+    ["no quedan lugares", "No quedan lugares en esa franja. Elegí otra."],
+    ["ya tiene un turno", "El profesional ya tiene un turno en ese horario."],
+    ["no atiende", "El profesional no atiende en ese horario."],
+    ["ya pasó", "Esa franja ya pasó. Elegí otra."],
+  ])("shares the create_booking translation for %o", (raw, expected) => {
+    expect(friendlyRescheduleError(raw)).toBe(expected);
+  });
+
+  it.each([
+    ["turno inexistente", "No encontramos ese turno."],
+    ["ya está cerrado", "Ese turno ya está cerrado: no se puede reprogramar."],
+  ])("translates the reschedule-only error %o", (raw, expected) => {
+    expect(friendlyRescheduleError(raw)).toBe(expected);
+  });
+
+  it("falls back to a reschedule-specific message, not the create one", () => {
+    expect(friendlyRescheduleError("connection reset by peer")).toBe(
+      "No pudimos reprogramar el turno. Intentá de nuevo.",
     );
   });
 });

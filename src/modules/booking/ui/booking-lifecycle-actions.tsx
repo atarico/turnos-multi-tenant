@@ -1,6 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
+import { CalendarClock } from "lucide-react";
 
 import { idleState } from "@/core/action";
 import { Button } from "@/components/ui/button";
@@ -9,6 +11,7 @@ import { updateBookingStatusAction } from "../application/booking-lifecycle";
 import {
   BOOKING_ACTION_LABELS,
   allowedTransitions,
+  canReschedule,
 } from "../domain/booking-transitions";
 import type { AgendaBooking, BookingStatus } from "../domain/types";
 
@@ -62,6 +65,16 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
             </Button>
           ))}
         </form>
+
+        {canReschedule(booking.status) && (
+          <Link
+            href={`/panel/turnos/${booking.id}/reprogramar`}
+            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border-strong px-3.5 text-sm font-medium tracking-tight text-foreground transition-all hover:border-gold/40 hover:bg-surface"
+          >
+            <CalendarClock className="size-4" />
+            Reprogramar
+          </Link>
+        )}
       </div>
 
       {state.status === "error" && (
