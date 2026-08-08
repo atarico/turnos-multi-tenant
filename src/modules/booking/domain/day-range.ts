@@ -13,7 +13,16 @@ export type DayRange = {
   endIso: string;
 };
 
+/** Un mes civil resuelto en la timezone del negocio. */
+export type MonthRange = {
+  /** Primer instante del mes civil, ISO UTC ("…Z"). Inclusivo. */
+  startIso: string;
+  /** Primer instante del mes siguiente, ISO UTC ("…Z"). Exclusivo. */
+  endIso: string;
+};
+
 const CIVIL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const CIVIL_MONTH = /^(\d{4})-(\d{2})$/;
 
 /** Instante → ISO canónico en UTC; `TZDate.toISOString()` conservaría el offset. */
 function toUtcIso(instant: Date): string {
@@ -59,4 +68,37 @@ export function resolveDayRange(dateStr: string, timezone: string): DayRange | n
   const end = new TZDate(year, month - 1, day + 1, 0, 0, 0, timezone);
 
   return { date, startIso: toUtcIso(start), endIso: toUtcIso(end) };
+}
+
+/**
+ * Resuelve "YYYY-MM" al rango [inicio de mes, inicio del mes siguiente) en la
+ * timezone del negocio, listo para filtrar columnas `timestamptz`.
+ *
+ * Mismo cuidado que en `resolveDayRange`, un nivel más arriba: el fin se
+ * construye como el mes civil SIGUIENTE, no sumando 30 días ni `addMonths`
+ * sobre el inicio. Donde el salto de DST cae sobre la medianoche del 1° (o
+ * sobre cualquier medianoche del mes, como el 6 de septiembre en Chile), el
+ * inicio queda normalizado hacia adelante y arrastrarlo devolvería un mes de
+ * 720h para uno que dura 719, comiéndose la primera hora del mes siguiente.
+ *
+ * El desborde de diciembre lo absorbe `TZDate`: mes 12 es enero del año que
+ * viene, igual que `day + 1` cruza al mes siguiente en `resolveDayRange`.
+ *
+ * Devuelve `null` si el mes está mal formado o no existe (ej. "2026-13").
+ */
+export function resolveMonthRange(
+  monthStr: string,
+  timezone: string,
+): MonthRange | null {
+  const match = CIVIL_MONTH.exec(monthStr);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+
+  const start = new TZDate(year, month - 1, 1, 0, 0, 0, timezone);
+  const end = new TZDate(year, month, 1, 0, 0, 0, timezone);
+
+  return { startIso: toUtcIso(start), endIso: toUtcIso(end) };
 }
