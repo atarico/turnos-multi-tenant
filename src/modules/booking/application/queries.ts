@@ -1,6 +1,7 @@
 import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 
+import { resolveMonthRange } from "../domain/day-range";
 import type {
   AgendaBooking,
   BookableService,
@@ -277,6 +278,80 @@ export async function getBooking(
     ...toAgendaBooking(row),
     serviceId: row.service_id,
     staffId: row.staff_id,
+  });
+}
+
+/** Total cobrado en un mes, con la moneda en la que se cobró. */
+export interface MonthlyRevenue {
+  totalCents: number;
+  currency: string;
+}
+
+/**
+ * Moneda a mostrar cuando el mes no tuvo un solo turno cerrado: sin filas no
+ * hay de dónde leerla. Coincide con el default de `services.currency`, que es
+ * lo único que puede haber hoy — la UI del catálogo no expone el campo.
+ */
+const FALLBACK_CURRENCY = "ARS";
+
+/**
+ * Ingresos del mes: suma del precio CONGELADO de los turnos completados.
+ *
+ * Dos decisiones que valen más que el código:
+ *
+ * 1. **Sólo `completed`.** Es lo que efectivamente se cobró. Un turno
+ *    confirmado todavía puede cancelarse, y contarlo sería vender plata que no
+ *    entró. Además cierra el círculo con "Turnos a cerrar": si el dueño no
+ *    cierra sus turnos, no ve ingresos.
+ * 2. **`price_cents` de la fila, no de `services`.** El precio del turno es un
+ *    hecho del pasado. Leerlo del catálogo hacía que subir la lista de precios
+ *    revaluara meses ya cerrados.
+ *
+ * La ventana es el mes civil del NEGOCIO (ver `resolveMonthRange`): un turno
+ * del 30 de septiembre a las 23:00 en Buenos Aires cae en octubre si se filtra
+ * por UTC.
+ *
+ * La suma la hace Postgres (`sum_monthly_revenue`), no esta función: traer las
+ * filas y sumarlas acá se rompía contra el `max_rows` de PostgREST, que recorta
+ * la respuesta en 1000 filas SIN devolver error. Un mes con más turnos
+ * completados que ese tope habría mostrado menos plata de la real, en silencio.
+ *
+ * El RPC devuelve una fila por moneda. Con más de una no hay total posible:
+ * sumar pesos con dólares no da un número, da un invento. En ese caso falla y
+ * el panel muestra "—".
+ */
+export async function sumMonthlyRevenue(
+  tenantId: string,
+  monthStr: string,
+  timezone: string,
+): Promise<Result<MonthlyRevenue>> {
+  const range = resolveMonthRange(monthStr, timezone);
+  if (!range) {
+    return err(appError("invalid_month", "No pudimos resolver el mes."));
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("sum_monthly_revenue", {
+    p_tenant_id: tenantId,
+    p_start: range.startIso,
+    p_end: range.endIso,
+  });
+
+  if (error || !data) {
+    return err(appError("revenue_query_failed", "No pudimos calcular los ingresos."));
+  }
+
+  const rows = data as { total_cents: number; currency: string }[];
+  if (rows.length > 1) {
+    return err(
+      appError("mixed_currencies", "Hay turnos en más de una moneda este mes."),
+    );
+  }
+
+  // Sin turnos cerrados no vuelve ninguna fila: el mes vale cero.
+  return ok({
+    totalCents: rows[0]?.total_cents ?? 0,
+    currency: rows[0]?.currency ?? FALLBACK_CURRENCY,
   });
 }
 
