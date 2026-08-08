@@ -19,8 +19,10 @@ import { signOutAction } from "@/modules/auth/application/actions";
 import {
   listBookingsToClose,
   listUpcomingBookings,
+  sumMonthlyRevenue,
 } from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
+import { formatPrice } from "@/modules/catalog/domain/money";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
@@ -38,6 +40,11 @@ function civilDay(iso: string | number, timezone: string): string {
  */
 function todayInTz(timezone: string): string {
   return civilDay(Date.now(), timezone);
+}
+
+/** Mes civil en curso en la tz del negocio, "YYYY-MM". Request-time, igual que `todayInTz`. */
+function currentMonthInTz(timezone: string): string {
+  return format(new TZDate(Date.now(), timezone), "yyyy-MM");
 }
 
 export const metadata: Metadata = { title: "Panel" };
@@ -66,12 +73,23 @@ export default async function PanelPage() {
     );
   }
 
-  const [bookingsResult, toCloseResult] = await Promise.all([
+  const [bookingsResult, toCloseResult, revenueResult] = await Promise.all([
     listUpcomingBookings(tenant.id),
     listBookingsToClose(tenant.id),
+    sumMonthlyRevenue(
+      tenant.id,
+      currentMonthInTz(tenant.timezone),
+      tenant.timezone,
+    ),
   ]);
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
+
+  // Si la consulta falla se muestra "—", no "$0": un cero es un dato, y un dato
+  // falso sobre la plata del negocio es peor que admitir que no se pudo leer.
+  const ingresos = revenueResult.ok
+    ? formatPrice(revenueResult.value.totalCents, revenueResult.value.currency)
+    : "—";
 
   const todayStr = todayInTz(tenant.timezone);
   const turnosHoy = bookings.filter(
@@ -136,8 +154,11 @@ export default async function PanelPage() {
           label="Turnos hoy"
           value={String(turnosHoy)}
         />
-        {/* Ingresos: pendiente de agregación de precios (próxima iteración). */}
-        <MetricCard icon={<Wallet className="size-5" />} label="Ingresos del mes" value="$0" />
+        <MetricCard
+          icon={<Wallet className="size-5" />}
+          label="Ingresos del mes"
+          value={ingresos}
+        />
         <MetricCard
           icon={<Clock className="size-5" />}
           label="Próximo turno"
