@@ -12,6 +12,15 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   NEXT_PUBLIC_APP_URL: z.url().default("http://localhost:3000"),
+  /**
+   * Salt del hash de IP que frena el spam de reservas anónimas.
+   *
+   * Sin salt el freno no protege a nadie: IPv4 son 4 mil millones de valores,
+   * así que cualquiera con acceso de lectura a la base reconstruye las IPs
+   * originales por fuerza bruta. Se pide largo para que no se resuelva con una
+   * cadena de diccionario.
+   */
+  BOOKING_IP_SALT: z.string().min(16, "Usá al menos 16 caracteres"),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

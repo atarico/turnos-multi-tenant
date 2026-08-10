@@ -1,12 +1,16 @@
 /**
  * Traduce los errores crudos de las RPC del motor de turnos
- * (`create_booking()` y `reschedule_booking()`) a algo accionable para quien
- * los lee.
+ * (`create_booking()`, `create_public_booking()` y `reschedule_booking()`) a
+ * algo accionable para quien los lee.
  *
  * Fuente ÚNICA de estos mensajes: los usan el panel (autenticado) y la página
- * pública (anónima). La RPC es la misma para los dos, así que el usuario tiene
- * que leer lo mismo venga por donde venga; dos copias divergen apenas alguien
- * ajusta un texto de un solo lado.
+ * pública (anónima). Las tres RPC comparten el grueso de las validaciones
+ * —`create_public_booking()` delega en `create_booking()`—, así que el usuario
+ * tiene que leer lo mismo venga por donde venga; dos copias divergen apenas
+ * alguien ajusta un texto de un solo lado.
+ *
+ * Lo que NO comparten va en su propia lista: mezclar todo haría que reprogramar
+ * pudiera contestar un mensaje que su RPC no puede tirar nunca.
  *
  * Compartir esto NO cruza la frontera low-trust / high-trust: esa frontera vive
  * en el acceso a datos y la identidad, no en un mapeo puro de strings.
@@ -27,6 +31,25 @@ const SHARED_RULES: [needle: string, message: string][] = [
   ["profesional no disponible", "El profesional no está disponible."],
   ["servicio no disponible", "El servicio no está disponible."],
   ["negocio inexistente", "No encontramos ese negocio."],
+];
+
+/**
+ * Errores que sólo puede tirar `create_public_booking()`, o sea el visitante
+ * anónimo. Ni el panel ni reprogramar pueden llegar acá: la RPC que los tira no
+ * está en esos caminos.
+ *
+ * Van PRIMERO que las de franja: el freno no es un problema con el horario
+ * elegido, así que contestar "elegí otra" sería un consejo inútil.
+ */
+const PUBLIC_BOOKING_RULES: [needle: string, message: string][] = [
+  [
+    "demasiadas reservas",
+    "Hiciste varias reservas seguidas. Esperá un rato y volvé a intentar.",
+  ],
+  [
+    "origen no identificado",
+    "No pudimos procesar la reserva desde este origen. Probá de nuevo.",
+  ],
 ];
 
 /** Errores que sólo puede tirar `reschedule_booking()`. */
@@ -50,7 +73,7 @@ function translate(
 export function friendlyBookingError(message: string): string {
   return translate(
     message,
-    SHARED_RULES,
+    [...PUBLIC_BOOKING_RULES, ...SHARED_RULES],
     "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
   );
 }

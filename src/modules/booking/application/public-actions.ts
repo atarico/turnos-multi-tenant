@@ -1,8 +1,13 @@
 "use server";
 
+import { createHash } from "node:crypto";
+
+import { headers } from "next/headers";
+
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { appError, err, ok, type Result } from "@/core/result";
-import { createClient } from "@/lib/supabase/server";
+import { serverEnv } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantBySlug } from "@/modules/tenants/application/queries";
 
 import { friendlyBookingError } from "../domain/booking-errors";
@@ -22,10 +27,12 @@ import {
  * Server Actions de la página PÚBLICA (anónima) `/{slug}`. No hay sesión de
  * la que derivar el tenant: el slug ES el input, así que cada acción lo
  * recibe explícito y re-resuelve `getTenantBySlug(slug)`. Seguro porque las
- * vistas `public_*` sólo exponen filas no sensibles y `create_booking()` es
- * SECURITY DEFINER: revalida tenant/servicio/staff/disponibilidad/solape/
- * cupo en la base sin importar qué mande el cliente. Un cliente hostil que
- * cambie el slug sólo gana lo que ya podía leer en `/{ese-otro-slug}`.
+ * vistas `public_*` sólo exponen filas no sensibles y la reserva entra por
+ * `create_public_booking()`, que es SECURITY DEFINER y delega en
+ * `create_booking()`: entre las dos revalidan tenant/servicio/staff/
+ * disponibilidad/solape/cupo en la base sin importar qué mande el cliente. Un
+ * cliente hostil que cambie el slug sólo gana lo que ya podía leer en
+ * `/{ese-otro-slug}`.
  *
  * Camino DELIBERADAMENTE separado de `actions.ts` (panel, autenticado):
  * comparten sólo el dominio puro (`domain/slots.ts`, `domain/day-range.ts`).
@@ -129,9 +136,52 @@ export async function getPublicSlotsAction(
 }
 
 /**
- * Crea la reserva del visitante anónimo vía la RPC `create_booking()`, el
- * único camino válido de inserción. Sin sesión que validar: el slug identifica
- * el negocio y la RPC (SECURITY DEFINER) revalida todo del lado del servidor.
+ * Bucket para las requests que llegan sin cabecera de origen (dev local, o un
+ * proxy que no la reenvía). Comparten un único contador a propósito: preferimos
+ * frenar de más a dejar un carril sin freno que se abre borrando una cabecera.
+ */
+const UNKNOWN_ORIGIN = "unknown-origin";
+
+/**
+ * Identifica el origen de la request para el freno anti-spam, ya hasheado.
+ *
+ * Se hashea acá y no en la base porque lo que queremos contar es "cuántas
+ * reservas hizo este origen", no saber de dónde viene la gente. La IP cruda es
+ * un dato personal y termina en backups y dumps; el hash salteado cuenta igual
+ * sin guardar eso. El salt es imprescindible: IPv4 son 4 mil millones de
+ * valores, o sea que un hash sin salt se revierte por fuerza bruta.
+ *
+ * `x-forwarded-for` puede traer una cadena de proxies: el cliente real es el
+ * PRIMERO. Ojo, esa cabecera la puede falsificar quien pegue directo al
+ * servidor; sirve mientras el deploy esté detrás de un proxy que la reescriba,
+ * que es el caso en Vercel.
+ */
+async function originFingerprint(): Promise<string> {
+  const headerList = await headers();
+  const forwarded = headerList.get("x-forwarded-for");
+  const ip =
+    forwarded?.split(",")[0]?.trim() ||
+    headerList.get("x-real-ip")?.trim() ||
+    UNKNOWN_ORIGIN;
+
+  return createHash("sha256")
+    .update(`${serverEnv().BOOKING_IP_SALT}:${ip}`)
+    .digest("hex");
+}
+
+/**
+ * Crea la reserva del visitante anónimo.
+ *
+ * Va por `create_public_booking()` y con el cliente `service_role`, NO con el
+ * cliente anónimo. La razón es el freno anti-spam: a `anon` se le revocó
+ * `create_booking()` justamente porque la anon key viaja al browser, así que
+ * cualquiera le pegaba a PostgREST directo, sin pasar por acá, y le llenaba la
+ * agenda a cualquier negocio. Con la puerta cerrada, este servidor es el único
+ * camino público, y recién ahí contar por origen sirve de algo.
+ *
+ * Sin sesión que validar: el slug identifica el negocio y la RPC (SECURITY
+ * DEFINER) revalida tenant, servicio, staff, disponibilidad, solape y cupo del
+ * lado del servidor, sin importar qué mande el cliente.
  */
 export async function createPublicBookingAction(
   slug: string,
@@ -156,13 +206,14 @@ export async function createPublicBookingAction(
     customer_phone,
   } = parsed.data;
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("create_booking", {
+  const supabase = createAdminClient();
+  const { error } = await supabase.rpc("create_public_booking", {
     p_tenant_slug: tenant.slug,
     p_staff_id: staff_id,
     p_service_id: service_id,
     p_starts_at: starts_at,
     p_customer_name: customer_name,
+    p_ip_hash: await originFingerprint(),
     p_customer_email: customer_email ? customer_email : null,
     p_customer_phone: customer_phone ? customer_phone : null,
   });

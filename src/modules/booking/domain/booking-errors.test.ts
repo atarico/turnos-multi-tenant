@@ -12,8 +12,24 @@ describe("friendlyBookingError", () => {
     ["profesional no disponible", "El profesional no está disponible."],
     ["servicio no disponible", "El servicio no está disponible."],
     ["negocio inexistente", "No encontramos ese negocio."],
+    [
+      "demasiadas reservas seguidas",
+      "Hiciste varias reservas seguidas. Esperá un rato y volvé a intentar.",
+    ],
+    [
+      "origen no identificado",
+      "No pudimos procesar la reserva desde este origen. Probá de nuevo.",
+    ],
   ])("translates the raw RPC error %o", (raw, expected) => {
     expect(friendlyBookingError(raw)).toBe(expected);
+  });
+
+  // El freno anti-spam no es un problema con la franja: mandar a "elegí otra"
+  // sería un consejo inútil, así que su regla tiene que ganarle a las de cupo.
+  it("prefers the throttle message over the slot rules", () => {
+    expect(
+      friendlyBookingError("demasiadas reservas seguidas; no quedan lugares"),
+    ).toBe("Hiciste varias reservas seguidas. Esperá un rato y volvé a intentar.");
   });
 
   it("matches the raw error regardless of case", () => {

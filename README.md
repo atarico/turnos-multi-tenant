@@ -14,7 +14,7 @@ SaaS de gestión de turnos para negocios de servicios. Cada negocio (tenant) adm
   - Ciclo de vida completo (pendiente → confirmado → completado / cancelado) con máquina de estados.
   - Reprogramación de turnos.
   - Precio congelado en la fila del turno al momento de reservar.
-- **Página pública de reservas**: flujo anónimo por tenant en `/{slug}`, servido por vistas `public_*` de solo lectura.
+- **Página pública de reservas**: flujo anónimo por tenant en `/{slug}`, servido por vistas `public_*` de solo lectura, con freno anti-spam (tope de reservas por hora por origen, con la IP hasheada).
 - **Panel con métricas**: turnos de hoy, próximo turno, turnos a cerrar e ingresos del mes (agregados en la base, resueltos en el mes civil de la zona horaria del tenant).
 
 ## Stack
@@ -66,7 +66,7 @@ Requisitos: Node.js 20+, pnpm y un proyecto de Supabase.
    pnpm install
    ```
 
-2. Crear `.env.local` con las variables del proyecto de Supabase:
+2. Copiar `.env.example` a `.env.local` y completar las variables del proyecto de Supabase:
 
    | Variable | Descripción |
    | --- | --- |
@@ -74,6 +74,7 @@ Requisitos: Node.js 20+, pnpm y un proyecto de Supabase.
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clave anónima (pública) |
    | `SUPABASE_SERVICE_ROLE_KEY` | Clave `service_role` (solo servidor, nunca expuesta al cliente) |
    | `NEXT_PUBLIC_APP_URL` | URL base de la app (default: `http://localhost:3000`) |
+   | `BOOKING_IP_SALT` | Salt para hashear la IP del visitante en el freno anti-spam (mín. 16 caracteres) |
 
 3. Aplicar las migraciones de `supabase/migrations/` al proyecto remoto:
 
@@ -115,3 +116,7 @@ El esquema completo vive en `supabase/migrations/` (orden cronológico): schema 
 - **Planes**: que `plan_tier` limite funcionalidades y se facture.
 - **Notificaciones**: recordatorios por WhatsApp.
 - **Infraestructura**: CI (lint + typecheck + tests + build) y configuración de deploy.
+
+## Notas de deploy
+
+El freno anti-spam identifica al visitante por su IP tomada de `x-forwarded-for`. Eso es confiable detrás de un proxy que reescriba ese header (por ejemplo Vercel). En un deploy self-hosted sin ese proxy, el header es falsificable y el freno se puede evadir: en ese caso hay que anteponer un proxy de confianza.

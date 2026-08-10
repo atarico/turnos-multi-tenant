@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...salvo `.env.example`, si se crea: es la plantilla SIN secretos a la que
+# remite `src/lib/env.ts` cuando falta una variable. Hoy el repo no la tiene,
+# así que esta excepción todavía no aplica a ningún archivo.
+!.env.example
 
 # vercel
 .vercel
