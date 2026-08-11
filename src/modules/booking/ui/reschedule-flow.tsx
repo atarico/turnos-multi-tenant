@@ -20,13 +20,18 @@ import { rescheduleBookingAction } from "../application/booking-lifecycle";
 import type {
   AvailableSlot,
   BookableStaff,
-  BookingDetail,
+  LinkedBookingDetail,
 } from "../domain/types";
 import { BookingCalendar } from "./booking-calendar";
 import { SlotGrid } from "./slot-grid";
 
 interface RescheduleFlowProps {
-  booking: BookingDetail;
+  /**
+   * `LinkedBookingDetail`, no `BookingDetail`: reprogramar exige un
+   * `serviceId`/`staffId` vinculados (define duración y destino), así que
+   * este flujo sólo tiene sentido para un turno todavía vinculado.
+   */
+  booking: LinkedBookingDetail;
   /** Profesionales que ofrecen ESE servicio: los únicos destinos válidos. */
   staffList: BookableStaff[];
   timezone: string;

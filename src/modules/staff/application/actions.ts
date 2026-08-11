@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
+import { deleteBlockMessage } from "@/modules/booking/domain/delete-outcome";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
@@ -20,6 +21,9 @@ import { getStaffMember } from "./queries";
  */
 
 type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+/** Código de violación de foreign key en Postgres. */
+const FOREIGN_KEY_VIOLATION = "23503";
 
 /** Refresca panel, profesionales y la página pública del negocio. */
 function revalidateStaff(tenant: Tenant) {
@@ -183,12 +187,17 @@ export async function toggleStaffActiveAction(
 }
 
 /**
- * Baja definitiva de un profesional.
- *
- * OJO con la FK: `bookings.staff_id` es `on delete cascade`, así que borrar al
- * profesional se llevaría puesto su historial de turnos SIN avisar. Por eso el
- * borrado se frena acá, en la aplicación, cuando tiene turnos: la base no lo
- * va a frenar por nosotros.
+ * Baja definitiva de un profesional. La regla (¿tiene turnos que la
+ * bloquean?) vive en la base: `delete_staff()` cuenta por status, desvincula
+ * los turnos terminales y borra, todo en una transacción, y devuelve un
+ * `delete_outcome`. Acá sólo se traduce ese resultado a copy — ya NO se hace
+ * el conteo desde la aplicación (era redundante contra la RPC y, peor, racy:
+ * un turno podía crearse entre el conteo y el DELETE). El `23503` sigue como
+ * red de contención para una excepción real (p. ej. la RPC no existe
+ * todavía), no como el camino normal — bloqueado es un resultado válido, no
+ * un error. La FK de `bookings.staff_id` ahora es `on delete restrict`
+ * (antes `cascade`), así que la base tampoco dejaría borrar un profesional
+ * con turnos aunque esta action tuviera un bug.
  */
 export async function deleteStaffAction(
   _prev: ActionState,
@@ -201,29 +210,21 @@ export async function deleteStaffAction(
   if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
 
   const supabase = await createClient();
-  const { count, error: countError } = await supabase
-    .from("bookings")
-    .select("id", { count: "exact", head: true })
-    .eq("staff_id", id)
-    .eq("tenant_id", tenant.id);
+  const { data, error } = await supabase.rpc("delete_staff", {
+    p_tenant_id: tenant.id,
+    p_staff_id: id,
+  });
 
-  if (countError) {
-    return errorState("No pudimos verificar los turnos del profesional.");
-  }
-  if ((count ?? 0) > 0) {
+  if (error) {
     return errorState(
-      "Este profesional ya tiene turnos, así que no se puede eliminar sin perderlos. Pausalo para dejar de ofrecerlo.",
+      error.code === FOREIGN_KEY_VIOLATION
+        ? "Este profesional ya tiene turnos, así que no se puede eliminar sin perderlos. Pausalo para dejar de ofrecerlo."
+        : "No pudimos eliminar al profesional. Intentá de nuevo.",
     );
   }
 
-  const { error } = await supabase
-    .from("staff")
-    .delete()
-    .eq("id", id)
-    .eq("tenant_id", tenant.id);
-
-  if (error) {
-    return errorState("No pudimos eliminar al profesional. Intentá de nuevo.");
+  if (data === "blocked_upcoming" || data === "blocked_history") {
+    return errorState(deleteBlockMessage(data, "profesional"));
   }
 
   revalidateStaff(tenant);
