@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
+import { deleteBlockMessage } from "@/modules/booking/domain/delete-outcome";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
@@ -123,9 +124,12 @@ export async function toggleServiceActiveAction(
 }
 
 /**
- * Baja definitiva. La FK de `bookings.service_id` es `on delete restrict`: si
- * el servicio ya tiene turnos, la base lo frena y acá se traduce a un mensaje
- * que dice qué hacer en su lugar.
+ * Baja definitiva. La regla (¿tiene turnos que la bloquean?) vive en la base:
+ * `delete_service()` cuenta por status, desvincula los turnos terminales y
+ * borra, todo en una transacción, y devuelve un `delete_outcome`. Acá sólo se
+ * traduce ese resultado a copy. El `23503` sigue como red de contención para
+ * una excepción real (p. ej. la RPC no existe todavía), no como el camino
+ * normal — bloqueado es un resultado válido, no un error.
  */
 export async function deleteServiceAction(
   _prev: ActionState,
@@ -138,11 +142,10 @@ export async function deleteServiceAction(
   if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("services")
-    .delete()
-    .eq("id", id)
-    .eq("tenant_id", tenant.id);
+  const { data, error } = await supabase.rpc("delete_service", {
+    p_tenant_id: tenant.id,
+    p_service_id: id,
+  });
 
   if (error) {
     return errorState(
@@ -150,6 +153,10 @@ export async function deleteServiceAction(
         ? "Este servicio ya tiene turnos, así que no se puede eliminar. Pausalo para dejar de ofrecerlo."
         : "No pudimos eliminar el servicio. Intentá de nuevo.",
     );
+  }
+
+  if (data === "blocked_upcoming" || data === "blocked_history") {
+    return errorState(deleteBlockMessage(data, "servicio"));
   }
 
   revalidateCatalog(tenant);
