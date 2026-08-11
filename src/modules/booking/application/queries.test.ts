@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sumMonthlyRevenue } from "./queries";
+import { getBooking, listUpcomingBookings, sumMonthlyRevenue } from "./queries";
 
 /**
  * Tests de la métrica de ingresos.
@@ -23,17 +23,62 @@ type RpcCall = (
 
 const rpc = vi.fn<RpcCall>(async () => ({ data: rows, error: queryError }));
 
+/**
+ * Doble mínimo del query builder encadenable de Supabase (`.select().eq()...`).
+ * El cliente real es "thenable" al final de la cadena (sin un terminal
+ * explícito) para listas, y expone `.maybeSingle()` para una sola fila — acá
+ * replicamos exactamente eso, nada más.
+ */
+let fromData: unknown = [];
+let fromError: { message: string } | null = null;
+
+interface Builder {
+  select: ReturnType<typeof vi.fn>;
+  eq: ReturnType<typeof vi.fn>;
+  in: ReturnType<typeof vi.fn>;
+  gte: ReturnType<typeof vi.fn>;
+  lt: ReturnType<typeof vi.fn>;
+  order: ReturnType<typeof vi.fn>;
+  maybeSingle: ReturnType<typeof vi.fn>;
+  then: (
+    resolve: (v: { data: unknown; error: typeof fromError }) => unknown,
+  ) => unknown;
+}
+
+function makeBuilder(): Builder {
+  const builder = {} as Builder;
+  for (const method of ["select", "eq", "in", "gte", "lt", "order"] as const) {
+    builder[method] = vi.fn(() => builder);
+  }
+  builder.maybeSingle = vi.fn(async () => ({ data: fromData, error: fromError }));
+  builder.then = (resolve) =>
+    Promise.resolve({ data: fromData, error: fromError }).then(resolve);
+  return builder;
+}
+
+const from = vi.fn(() => makeBuilder());
+
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ rpc }),
+  createClient: async () => ({ rpc, from }),
 }));
 
 /** Los argumentos con los que se llamó al RPC. */
 const rpcArgs = () => rpc.mock.calls[0]![1];
 
+/** La cadena `.select(...)` con la que se armó la última consulta `.from(...)`. */
+const lastSelect = () => {
+  const builder = from.mock.results[from.mock.results.length - 1]!
+    .value as Builder;
+  return builder.select.mock.calls[0]![0] as string;
+};
+
 beforeEach(() => {
   rows = [];
   queryError = null;
   rpc.mockClear();
+  fromData = [];
+  fromError = null;
+  from.mockClear();
 });
 
 const AR = "America/Argentina/Buenos_Aires";
@@ -116,5 +161,94 @@ describe("sumMonthlyRevenue", () => {
     const result = await sumMonthlyRevenue("tenant-1", "2026-09", AR);
 
     expect(result.ok).toBe(false);
+  });
+});
+
+/**
+ * Mapeo de nombre de servicio/profesional en la agenda.
+ *
+ * `service_name`/`staff_name` son una foto congelada en el turno (igual que
+ * `price_cents`), no el nombre VIVO de `services`/`staff`: por eso se leen
+ * directo de la fila y nunca con un fallback tipo `"—"` — la columna es
+ * `NOT NULL` desde el momento en que el turno se crea, borrar el
+ * servicio/profesional después no la vacía.
+ */
+describe("listUpcomingBookings", () => {
+  it("reads the snapshot names frozen on the booking row", async () => {
+    fromData = [
+      {
+        id: "b1",
+        customer_name: "Ana",
+        customer_phone: null,
+        starts_at: "2026-09-01T10:00:00Z",
+        ends_at: "2026-09-01T10:30:00Z",
+        status: "confirmed",
+        service_name: "Corte",
+        staff_name: "Juan",
+      },
+    ];
+
+    const result = await listUpcomingBookings("tenant-1");
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value[0]?.serviceName).toBe("Corte");
+    expect(result.ok && result.value[0]?.staffName).toBe("Juan");
+  });
+
+  it("selects the snapshot columns instead of the live services/staff joins", async () => {
+    await listUpcomingBookings("tenant-1");
+
+    const select = lastSelect();
+    expect(select).toContain("service_name");
+    expect(select).toContain("staff_name");
+    expect(select).not.toContain("services(");
+    expect(select).not.toContain("staff(");
+  });
+});
+
+describe("getBooking", () => {
+  it("returns null serviceId/staffId for a booking unlinked from a deleted parent", async () => {
+    fromData = {
+      id: "b1",
+      customer_name: "Ana",
+      customer_phone: null,
+      starts_at: "2026-09-01T10:00:00Z",
+      ends_at: "2026-09-01T10:30:00Z",
+      status: "cancelled",
+      service_name: "Corte",
+      staff_name: "Juan",
+      service_id: null,
+      staff_id: null,
+    };
+
+    const result = await getBooking("tenant-1", "b1");
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.serviceId).toBeNull();
+    expect(result.ok && result.value.staffId).toBeNull();
+    // El nombre sobrevive congelado aunque el vínculo se haya cortado.
+    expect(result.ok && result.value.serviceName).toBe("Corte");
+    expect(result.ok && result.value.staffName).toBe("Juan");
+  });
+
+  it("returns the live serviceId/staffId for a still-linked booking", async () => {
+    fromData = {
+      id: "b1",
+      customer_name: "Ana",
+      customer_phone: null,
+      starts_at: "2026-09-01T10:00:00Z",
+      ends_at: "2026-09-01T10:30:00Z",
+      status: "confirmed",
+      service_name: "Corte",
+      staff_name: "Juan",
+      service_id: "service-1",
+      staff_id: "staff-1",
+    };
+
+    const result = await getBooking("tenant-1", "b1");
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.serviceId).toBe("service-1");
+    expect(result.ok && result.value.staffId).toBe("staff-1");
   });
 });

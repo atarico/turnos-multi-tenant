@@ -8,6 +8,7 @@ import {
   listStaffForService,
 } from "@/modules/booking/application/queries";
 import { canReschedule } from "@/modules/booking/domain/booking-transitions";
+import { isLinkedBooking } from "@/modules/booking/domain/types";
 import { RescheduleFlow } from "@/modules/booking/ui/reschedule-flow";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
@@ -32,6 +33,13 @@ export default async function ReprogramarTurnoPage({
   // Un turno cerrado no se mueve. Se corta acá además de en la action: no tiene
   // sentido pintar un calendario para algo que el servidor va a rechazar.
   if (!canReschedule(booking.status)) redirect("/panel");
+
+  // `canReschedule` sólo deja pasar 'pending'/'confirmed': el CHECK
+  // `bookings_service_link_or_terminal`/`..._staff_link_or_terminal` ya
+  // garantiza `serviceId`/`staffId` no nulos para esos estados, así que esto
+  // es formalmente inalcanzable — pero es la angostura honesta que
+  // TypeScript necesita para pasar `booking` como `LinkedBookingDetail`.
+  if (!isLinkedBooking(booking)) notFound();
 
   const staffResult = await listStaffForService(tenant.id, booking.serviceId);
   const staffList = staffResult.ok ? staffResult.value : [];
