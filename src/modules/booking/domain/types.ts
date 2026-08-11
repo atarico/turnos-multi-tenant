@@ -82,10 +82,47 @@ export interface AgendaBooking {
  * Un turno con las referencias que la agenda no necesita pintar pero sí hacen
  * falta para OPERAR sobre él: reprogramarlo exige saber qué servicio define la
  * duración y qué profesional lo atiende hoy.
+ *
+ * `serviceId`/`staffId` son nullable: `services`/`staff` ahora se pueden
+ * borrar, y el CHECK `bookings_service_link_or_terminal` /
+ * `..._staff_link_or_terminal` sólo garantiza el vínculo mientras el turno
+ * sigue vivo (`pending`/`confirmed`/`completed`). Uno `cancelled`/`no_show`
+ * puede quedar desvinculado para siempre — su nombre sobrevive congelado en
+ * `serviceName`/`staffName`, no acá.
  */
 export interface BookingDetail extends AgendaBooking {
+  serviceId: string | null;
+  staffId: string | null;
+}
+
+/**
+ * Un turno con las referencias VIVAS ya resueltas: lo que necesita
+ * `RescheduleFlow` para operar (duración del servicio, profesional a mover).
+ * El CHECK de la base garantiza `serviceId`/`staffId` no nulos en cualquier
+ * turno reprogramable — `isLinkedBooking` es la angostura que se lo hace
+ * explícito al compilador.
+ *
+ * Nombrado `Linked`, no `Live`: `booking-transitions.ts` ya exporta un
+ * `isLiveBooking(status)` sin relación (¿el turno ocupa agenda?). Mismo
+ * módulo padre, mismo nombre, firma distinta — un import equivocado no
+ * habría tirado error de tipos en la mayoría de los usos. La invariante acá
+ * es precisa: ambas FK siguen VINCULADAS, no que el turno esté "vivo".
+ */
+export type LinkedBookingDetail = BookingDetail & {
   serviceId: string;
   staffId: string;
+};
+
+/**
+ * Traduce la garantía del CHECK a un type guard. Angostar sólo
+ * `booking.serviceId`/`booking.staffId` sueltos no alcanza para pasar el
+ * objeto ENTERO como `LinkedBookingDetail` — TypeScript no propaga esa
+ * angostura al tipo de `booking` — de ahí este guard explícito.
+ */
+export function isLinkedBooking(
+  booking: BookingDetail,
+): booking is LinkedBookingDetail {
+  return booking.serviceId !== null && booking.staffId !== null;
 }
 
 /**

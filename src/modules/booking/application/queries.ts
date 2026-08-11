@@ -162,14 +162,18 @@ interface AgendaBookingRow {
   starts_at: string;
   ends_at: string;
   status: BookingStatus;
-  // Embeds a-uno vía las FK de bookings; PostgREST los devuelve como objeto.
-  services: { name: string } | null;
-  staff: { name: string } | null;
+  // Foto congelada al crear el turno (`snapshot_booking_names()`), no el
+  // nombre vivo de `services`/`staff` — por eso NUNCA se lee vía embed ni
+  // se le pone un fallback: la columna es NOT NULL desde el origen.
+  service_name: string;
+  staff_name: string;
 }
 
 interface BookingDetailRow extends AgendaBookingRow {
-  service_id: string;
-  staff_id: string;
+  // Nullable: el turno puede seguir 'cancelled'/'no_show' con su servicio o
+  // profesional ya borrado — el CHECK sólo exige el vínculo mientras vive.
+  service_id: string | null;
+  staff_id: string | null;
 }
 
 /**
@@ -179,16 +183,22 @@ interface BookingDetailRow extends AgendaBookingRow {
  */
 const LIVE_STATUSES: BookingStatus[] = ["pending", "confirmed"];
 
-/** Columnas del turno tal como las pinta la agenda. */
+/**
+ * Columnas del turno tal como las pinta la agenda. Lee `service_name`/
+ * `staff_name` — la foto congelada en la fila — en vez de embeber
+ * `services(name)`/`staff(name)`: esos joins devolverían `null` para un
+ * turno con el servicio o profesional ya borrado, y un rename retroactivo
+ * reescribiría el historial si se leyera el nombre vivo.
+ */
 const AGENDA_COLUMNS =
-  "id, customer_name, customer_phone, starts_at, ends_at, status, services(name), staff(name)";
+  "id, customer_name, customer_phone, starts_at, ends_at, status, service_name, staff_name";
 
 const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   id: r.id,
   customerName: r.customer_name,
   customerPhone: r.customer_phone,
-  serviceName: r.services?.name ?? "—",
-  staffName: r.staff?.name ?? "—",
+  serviceName: r.service_name,
+  staffName: r.staff_name,
   startsAt: r.starts_at,
   endsAt: r.ends_at,
   status: r.status,
@@ -359,6 +369,10 @@ export async function sumMonthlyRevenue(
  * Reservas vivas ('pending'/'confirmed') de un profesional que SOLAPAN un
  * rango [inicio, fin). Se usa el solape real (no sólo `starts_at` dentro del
  * día) para no perder una reserva que arranca antes de la medianoche del día.
+ *
+ * `service_id` no es nullable acá pese a serlo en la tabla: el CHECK
+ * `bookings_service_link_or_terminal` garantiza el vínculo mientras el turno
+ * siga en `LIVE_STATUSES`, que es exactamente el filtro de esta consulta.
  */
 export async function getBookingLoad(
   staffId: string,
