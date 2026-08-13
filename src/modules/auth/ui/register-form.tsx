@@ -6,11 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { idleState } from "@/core/action";
 
-import {
-  COUNTRY_LABELS,
-  SUPPORTED_COUNTRIES,
-} from "@/modules/tenants/domain/countries";
-
 import { signUpAction } from "../application/actions";
 
 export function RegisterForm() {
@@ -32,37 +27,6 @@ export function RegisterForm() {
           {state.message}
         </p>
       )}
-
-      <div>
-        <Label htmlFor="businessName">Nombre del negocio</Label>
-        <Input
-          id="businessName"
-          name="businessName"
-          placeholder="Estudio Pilates Centro"
-          autoComplete="organization"
-        />
-        {fieldErrors?.businessName && <FieldError>{fieldErrors.businessName}</FieldError>}
-      </div>
-
-      <div>
-        <Label htmlFor="country">País</Label>
-        <select
-          id="country"
-          name="country"
-          defaultValue=""
-          className="h-11 w-full rounded-xl border border-border bg-surface-2 px-3.5 text-sm text-foreground focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/15"
-        >
-          <option value="" disabled>
-            Elegí un país
-          </option>
-          {SUPPORTED_COUNTRIES.map((c) => (
-            <option key={c} value={c}>
-              {COUNTRY_LABELS[c]}
-            </option>
-          ))}
-        </select>
-        {fieldErrors?.country && <FieldError>{fieldErrors.country}</FieldError>}
-      </div>
 
       <div>
         <Label htmlFor="fullName">Tu nombre</Label>
@@ -100,7 +64,7 @@ export function RegisterForm() {
       </div>
 
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Creando tu negocio…" : "Crear mi negocio"}
+        {pending ? "Creando tu cuenta…" : "Crear mi cuenta"}
       </Button>
     </form>
   );
