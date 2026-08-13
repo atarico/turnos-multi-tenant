@@ -68,6 +68,20 @@
     background: color-mix(in oklab, var(--color-gold) 30%, transparent);
     color: var(--color-foreground);
   }
+  /* Pointer cursor on every enabled interactive element. `label:has(...)`
+     covers checkbox/radio labels that wrap their input instead of using
+     `for`/`htmlFor` (e.g. staff-form.tsx's service picker) — without it,
+     removing a local `cursor-pointer` patch on those labels would silently
+     regress them. `:not(:disabled)` / `:not([aria-disabled="true"])` keep
+     disabled controls on the default cursor; `cursor-not-allowed` utilities
+     still win via `@layer utilities` > `@layer base`. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary,
+  label[for],
+  label:has(input:is([type="checkbox"], [type="radio"])) {
+    cursor: pointer;
+  }
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-border-strong) transparent;

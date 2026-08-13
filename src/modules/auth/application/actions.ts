@@ -82,7 +82,7 @@ export async function signUpAction(
   }
 
   revalidatePath("/", "layout");
-  redirect("/panel");
+  redirect("/panel?bienvenida=1");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ export async function signInAction(
   }
 
   revalidatePath("/", "layout");
-  redirect("/panel");
+  redirect("/panel?bienvenida=1");
 }
 
 // ─────────────────────────────────────────────────────────────

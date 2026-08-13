@@ -26,7 +26,9 @@ import { formatPrice } from "@/modules/catalog/domain/money";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
+import { displayBookingUrl, publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import { OnboardingForm } from "@/modules/tenants/ui/onboarding-form";
+import { PublicLinkDialog } from "@/modules/tenants/ui/public-link-dialog";
 
 /** Instante ISO → "YYYY-MM-DD" civil en la tz del negocio. */
 function civilDay(iso: string | number, timezone: string): string {
@@ -55,7 +57,12 @@ const PLAN_LABELS: Record<PlanTier, string> = {
   premium: "Premium",
 };
 
-export default async function PanelPage() {
+interface PanelPageProps {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+export default async function PanelPage({ searchParams }: PanelPageProps) {
+  const { bienvenida } = await searchParams;
   const tenant = await getCurrentTenant();
 
   // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
@@ -91,6 +98,17 @@ export default async function PanelPage() {
     ? formatPrice(revenueResult.value.totalCents, revenueResult.value.currency)
     : "—";
 
+  // Literal member access (not `serverEnv()`): panel pages don't otherwise
+  // depend on the service-role env surface, and this keeps them free of it.
+  const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL;
+  if (!configuredOrigin) {
+    console.warn(
+      "NEXT_PUBLIC_APP_URL is not set; public booking links fall back to http://localhost:3000",
+    );
+  }
+  const origin = configuredOrigin || "http://localhost:3000";
+  const publicUrl = publicBookingUrl(origin, tenant.slug);
+
   const todayStr = todayInTz(tenant.timezone);
   const turnosHoy = bookings.filter(
     (b) => civilDay(b.startsAt, tenant.timezone) === todayStr,
@@ -105,6 +123,7 @@ export default async function PanelPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <PublicLinkDialog url={publicUrl} triggered={bienvenida === "1"} />
       <header className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
@@ -114,7 +133,16 @@ export default async function PanelPage() {
             <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
           </div>
           <p className="mt-1 text-sm text-muted">
-            turnos.app/{tenant.slug} · {COUNTRY_LABELS[tenant.country]}
+            <span className="text-faint">URL para clientes:</span>{" "}
+            <a
+              href={publicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline decoration-border-strong underline-offset-2 transition-colors hover:text-foreground"
+            >
+              {displayBookingUrl(publicUrl)}
+            </a>{" "}
+            · {COUNTRY_LABELS[tenant.country]}
           </p>
         </div>
         <div className="flex items-center gap-4">
