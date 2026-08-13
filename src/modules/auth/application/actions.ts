@@ -6,7 +6,6 @@ import { redirect } from "next/navigation";
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
-import { generateTenantSlug } from "@/modules/tenants/domain/slug";
 
 import { loginSchema, registerSchema } from "../domain/schemas";
 
@@ -23,7 +22,7 @@ function friendlyAuthError(message: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Registro de un negocio (cuenta + tenant + membresía owner)
+// Registro de la cuenta (el negocio lo crea el onboarding del panel)
 // ─────────────────────────────────────────────────────────────
 export async function signUpAction(
   _prev: ActionState,
@@ -36,8 +35,6 @@ export async function signUpAction(
   }
 
   const parsed = registerSchema.safeParse({
-    businessName: String(formData.get("businessName") ?? ""),
-    country: String(formData.get("country") ?? ""),
     fullName: String(formData.get("fullName") ?? ""),
     email: String(formData.get("email") ?? ""),
     password: String(formData.get("password") ?? ""),
@@ -47,7 +44,7 @@ export async function signUpAction(
     return errorState("Revisá los datos del formulario.", zodFieldErrors(parsed.error));
   }
 
-  const { businessName, country, fullName, email, password } = parsed.data;
+  const { fullName, email, password } = parsed.data;
   const supabase = await createClient();
 
   const { data, error } = await supabase.auth.signUp({
@@ -60,25 +57,13 @@ export async function signUpAction(
     return errorState(friendlyAuthError(error.message));
   }
 
-  // Si Supabase tiene "Confirm email" activado, no hay sesión todavía: el
-  // negocio se crea en el primer login (lo resuelve el onboarding del panel).
+  // Con "Confirm email" activado no hay sesión todavía: el negocio se crea
+  // igual, en el onboarding del panel, después del primer login.
   if (!data.session) {
     return {
       status: "success",
       message: "Te enviamos un email para confirmar tu cuenta. Confirmá y volvé a ingresar.",
     };
-  }
-
-  // Hay sesión → creamos el negocio de forma atómica vía la función Postgres.
-  const slug = generateTenantSlug(businessName);
-  const { error: rpcError } = await supabase.rpc("create_business", {
-    p_name: businessName,
-    p_slug: slug,
-    p_country: country,
-  });
-
-  if (rpcError) {
-    return errorState("Creamos tu cuenta, pero falló la creación del negocio. Entrá y reintentá.");
   }
 
   revalidatePath("/", "layout");
