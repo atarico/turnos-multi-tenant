@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 const STEPS = [
@@ -85,16 +85,15 @@ export default function HomePage() {
             className="animate-rise mt-8 flex flex-wrap items-center gap-3"
             style={{ animationDelay: "240ms" }}
           >
-            <Link href="/registro">
-              <Button size="lg">
-                Crear mi negocio
-                <ArrowRight className="size-4" />
-              </Button>
+            <Link href="/registro" className={buttonClasses({ size: "lg" })}>
+              Crear mi negocio
+              <ArrowRight className="size-4" />
             </Link>
-            <Link href="#como-funciona">
-              <Button variant="outline" size="lg">
-                Ver cómo funciona
-              </Button>
+            <Link
+              href="#como-funciona"
+              className={buttonClasses({ variant: "outline", size: "lg" })}
+            >
+              Ver cómo funciona
             </Link>
           </div>
 

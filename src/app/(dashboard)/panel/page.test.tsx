@@ -58,6 +58,27 @@ describe("PanelPage", () => {
   );
 
   it(
+    "labels the public booking link so the tenant knows what the URL is for",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      process.env.NEXT_PUBLIC_APP_URL = "https://turnos.app";
+      const { default: PanelPage } = await import("./page");
+
+      render(
+        await PanelPage({
+          searchParams: Promise.resolve({}),
+        }),
+      );
+
+      expect(screen.getByText(/URL para clientes/i)).toBeInTheDocument();
+    },
+  );
+
+  it(
     "warns and falls back to localhost when NEXT_PUBLIC_APP_URL is missing",
     { timeout: 15000 },
     async () => {

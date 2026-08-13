@@ -35,6 +35,23 @@ const sizes: Record<Size, string> = {
   lg: "h-14 px-7 text-base",
 };
 
+/**
+ * Composición de clases del botón, expuesta aparte para que un `<a>`/`<Link>`
+ * pueda verse como botón sin anidar un `<button>` dentro (HTML inválido: el
+ * botón se roba la activación y mata la navegación del ancla).
+ */
+export function buttonClasses({
+  variant = "primary",
+  size = "md",
+  className,
+}: {
+  variant?: Variant;
+  size?: Size;
+  className?: string;
+} = {}) {
+  return cn(base, variants[variant], sizes[size], className);
+}
+
 export function Button({
   variant = "primary",
   size = "md",
@@ -42,9 +59,6 @@ export function Button({
   ...props
 }: ButtonProps) {
   return (
-    <button
-      className={cn(base, variants[variant], sizes[size], className)}
-      {...props}
-    />
+    <button className={buttonClasses({ variant, size, className })} {...props} />
   );
 }

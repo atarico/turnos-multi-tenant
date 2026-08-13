@@ -133,6 +133,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
             <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
           </div>
           <p className="mt-1 text-sm text-muted">
+            <span className="text-faint">URL para clientes:</span>{" "}
             <a
               href={publicUrl}
               target="_blank"
