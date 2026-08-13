@@ -5,12 +5,32 @@ import {
   Clock,
   CreditCard,
   MessageCircle,
+  Scissors,
+  Send,
   Sparkles,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+
+const STEPS = [
+  {
+    icon: Scissors,
+    title: "Creá tus servicios",
+    description: "Cargá lo que ofrecés, cuánto dura y cuánto cobrás.",
+  },
+  {
+    icon: Send,
+    title: "Compartí tu link",
+    description: "Un link propio, el mismo que ven tus clientes al reservar.",
+  },
+  {
+    icon: CalendarCheck,
+    title: "Recibí tus turnos",
+    description: "Se acomodan solos en tu agenda, sin ida y vuelta.",
+  },
+];
 
 export default function HomePage() {
   return (
@@ -65,16 +85,15 @@ export default function HomePage() {
             className="animate-rise mt-8 flex flex-wrap items-center gap-3"
             style={{ animationDelay: "240ms" }}
           >
-            <Link href="/registro">
-              <Button size="lg">
-                Crear mi negocio
-                <ArrowRight className="size-4" />
-              </Button>
+            <Link href="/registro" className={buttonClasses({ size: "lg" })}>
+              Crear mi negocio
+              <ArrowRight className="size-4" />
             </Link>
-            <Link href="#como-funciona">
-              <Button variant="outline" size="lg">
-                Ver cómo funciona
-              </Button>
+            <Link
+              href="#como-funciona"
+              className={buttonClasses({ variant: "outline", size: "lg" })}
+            >
+              Ver cómo funciona
             </Link>
           </div>
 
@@ -149,6 +168,38 @@ export default function HomePage() {
               </span>
             ))}
           </Card>
+        </div>
+      </section>
+
+      {/* ── Cómo funciona ── */}
+      <section id="como-funciona" className="border-t border-border py-16">
+        <div className="animate-rise text-center">
+          <Badge variant="gold">Así de simple</Badge>
+          <h2 className="mt-4 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+            Cómo funciona
+          </h2>
+        </div>
+
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          {STEPS.map((step, i) => (
+            <Card
+              key={step.title}
+              data-step
+              className="animate-rise p-6"
+              style={{ animationDelay: `${i * 120}ms` }}
+            >
+              <span className="font-display text-4xl font-semibold text-gold">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <div className="mt-4 flex items-center gap-2 text-foreground">
+                <step.icon className="size-5 text-gold-dim" />
+                <h3 className="font-medium tracking-tight">{step.title}</h3>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-muted">
+                {step.description}
+              </p>
+            </Card>
+          ))}
         </div>
       </section>
 

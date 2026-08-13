@@ -91,7 +91,7 @@ export function StaffForm({ member, services, save, onCancel }: StaffFormProps) 
               {services.map((service) => (
                 <label
                   key={service.id}
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-border bg-surface-2 px-3.5 py-2 text-sm text-foreground transition-colors hover:border-gold/40"
+                  className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3.5 py-2 text-sm text-foreground transition-colors hover:border-gold/40"
                 >
                   <input
                     type="checkbox"
