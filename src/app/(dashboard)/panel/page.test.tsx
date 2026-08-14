@@ -1,15 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { throwingRedirectSpy } from "@/test-support/next-navigation";
 import type { AgendaBooking } from "@/modules/booking/domain/types";
 import { publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
-// `redirect()` real corta el render lanzando: si el mock devolviera undefined
-// la page seguiría ejecutándose con `tenant` en null y reventaría por otro lado.
-const redirect = vi.fn((path: string): never => {
-  throw new Error(`NEXT_REDIRECT:${path}`);
-});
+const redirect = throwingRedirectSpy();
 vi.mock("next/navigation", () => ({
   redirect: (path: string) => redirect(path),
 }));
@@ -105,6 +102,27 @@ describe("PanelPage", () => {
         "href",
         publicBookingUrl("https://turnos.app", "acme"),
       );
+    },
+  );
+
+  // El link es lo que el dueño manda a sus clientes: tiene que poder copiarlo
+  // desde el panel, no seleccionarlo a mano.
+  it(
+    "ofrece copiar el link público desde el panel",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      process.env.NEXT_PUBLIC_APP_URL = "https://turnos.app";
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(
+        screen.getByRole("button", { name: "Copiar enlace" }),
+      ).toBeInTheDocument();
     },
   );
 

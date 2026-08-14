@@ -25,11 +25,12 @@ import {
 } from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { formatPrice } from "@/modules/catalog/domain/money";
+import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
-import { displayBookingUrl, publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import { PublicLinkDialog } from "@/modules/tenants/ui/public-link-dialog";
+import { PublicLinkField } from "@/modules/tenants/ui/public-link-field";
 
 /**
  * "Hoy" civil en la tz del negocio, "YYYY-MM-DD". Aislado en su propia función
@@ -89,16 +90,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   // dueño sobre su propio día.
   const turnosHoy = todayCountResult.ok ? String(todayCountResult.value) : "—";
 
-  // Literal member access (not `serverEnv()`): panel pages don't otherwise
-  // depend on the service-role env surface, and this keeps them free of it.
-  const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL;
-  if (!configuredOrigin) {
-    console.warn(
-      "NEXT_PUBLIC_APP_URL is not set; public booking links fall back to http://localhost:3000",
-    );
-  }
-  const origin = configuredOrigin || "http://localhost:3000";
-  const publicUrl = publicBookingUrl(origin, tenant.slug);
+  const publicUrl = resolvePublicBookingUrl(tenant.slug);
 
   const proximoTurno = bookings[0]
     ? format(
@@ -112,25 +104,18 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <PublicLinkDialog url={publicUrl} triggered={bienvenida === "1"} />
       <header className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-3">
             <h1 className="font-display text-2xl font-semibold tracking-tight">
               {tenant.name}
             </h1>
             <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
+            <span className="text-sm text-muted">
+              {COUNTRY_LABELS[tenant.country]}
+            </span>
           </div>
-          <p className="mt-1 text-sm text-muted">
-            <span className="text-faint">URL para clientes:</span>{" "}
-            <a
-              href={publicUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline decoration-border-strong underline-offset-2 transition-colors hover:text-foreground"
-            >
-              {displayBookingUrl(publicUrl)}
-            </a>{" "}
-            · {COUNTRY_LABELS[tenant.country]}
-          </p>
+          <p className="mt-3 text-sm text-faint">URL para clientes</p>
+          <PublicLinkField url={publicUrl} className="mt-1.5 max-w-md" />
         </div>
         <div className="flex items-center gap-4">
           <Link

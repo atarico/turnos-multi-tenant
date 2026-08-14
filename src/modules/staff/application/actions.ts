@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
@@ -146,10 +147,13 @@ export async function saveStaffAction(
   }
 
   revalidateStaff(tenant);
-  return {
-    status: "success",
-    message: id ? "Profesional actualizado." : "Profesional agregado.",
-  };
+
+  // Un profesional recién creado todavía no ofrece un solo turno: sin horario
+  // cargado no hay disponibilidad. Por eso el ALTA encadena con esa pantalla,
+  // y la EDICIÓN no — a quien vino a corregir un nombre no se lo muda de lugar.
+  if (!id) redirect(`/panel/profesionales/${staffId}/horarios`);
+
+  return { status: "success", message: "Profesional actualizado." };
 }
 
 /**
@@ -290,5 +294,10 @@ export async function saveScheduleAction(
 
   revalidateStaff(tenant);
   revalidatePath(`/panel/profesionales/${staffId}/horarios`);
+
+  // El horario es el último paso de la puesta a punto: terminarlo devuelve al
+  // listado, que es desde donde se sigue trabajando.
+  redirect("/panel/profesionales");
+
   return { status: "success", message: "Horario guardado." };
 }

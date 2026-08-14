@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { idleState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
 
-import { deleteStaffAction, saveScheduleAction } from "./actions";
+import {
+  deleteStaffAction,
+  saveScheduleAction,
+  saveStaffAction,
+} from "./actions";
 
 /**
  * Tests de `saveScheduleAction`: el guardado del horario semanal tiene que ser
@@ -17,12 +21,55 @@ vi.mock("next/cache", () => ({
   revalidatePath: (path: string) => revalidatePath(path),
 }));
 
+const redirect = vi.fn();
+vi.mock("next/navigation", () => ({
+  redirect: (path: string) => redirect(path),
+}));
+
 const rpc = vi.fn(async () => ({
   data: null as string | null,
   error: null as { code?: string; message: string } | null,
 }));
+
+/** Lo que devuelve cualquier consulta del builder falso de Supabase. */
+type QueryResult = {
+  data: { id: string } | null;
+  error: { message: string } | null;
+};
+
+/**
+ * Builder encadenable mínimo: cada método devuelve el mismo objeto, que además
+ * es awaitable. Alcanza para `insert().select().single()`, `update().eq().eq()`
+ * y `delete().eq().not()`, que es todo lo que hace `saveStaffAction`.
+ */
+interface QueryChain extends PromiseLike<QueryResult> {
+  insert(): QueryChain;
+  update(): QueryChain;
+  delete(): QueryChain;
+  select(): QueryChain;
+  eq(): QueryChain;
+  not(): QueryChain;
+  single(): Promise<QueryResult>;
+}
+
+const NEW_STAFF_ID = "staff-nuevo";
+let queryResult: QueryResult = { data: { id: NEW_STAFF_ID }, error: null };
+
+const chain: QueryChain = {
+  insert: () => chain,
+  update: () => chain,
+  delete: () => chain,
+  select: () => chain,
+  eq: () => chain,
+  not: () => chain,
+  single: async () => queryResult,
+  then: (onfulfilled, onrejected) =>
+    Promise.resolve(queryResult).then(onfulfilled, onrejected),
+};
+
+const from = vi.fn(() => chain);
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({ rpc }),
+  createClient: async () => ({ rpc, from }),
 }));
 
 const getCurrentTenant = vi.fn(async (): Promise<unknown> => ({
@@ -58,6 +105,47 @@ function scheduleForm(
 beforeEach(() => {
   vi.clearAllMocks();
   rpc.mockResolvedValue({ data: "deleted", error: null });
+  queryResult = { data: { id: NEW_STAFF_ID }, error: null };
+});
+
+/** Arma el FormData tal como lo manda el formulario de profesionales. */
+function staffForm(id = ""): FormData {
+  const form = new FormData();
+  form.append("id", id);
+  form.append("name", "Ana Gómez");
+  form.append("role", "Peluquera");
+  return form;
+}
+
+/**
+ * Un profesional sin horario no ofrece un solo turno, así que el alta encadena
+ * con la pantalla de horarios. La edición NO: quien corrige un nombre no quiere
+ * que lo saquen de la pantalla en la que está.
+ */
+describe("saveStaffAction", () => {
+  it("después de un ALTA manda al horario del profesional recién creado", async () => {
+    await saveStaffAction(idleState, staffForm());
+
+    expect(redirect).toHaveBeenCalledWith(
+      `/panel/profesionales/${NEW_STAFF_ID}/horarios`,
+    );
+  });
+
+  it("después de una EDICIÓN no mueve al usuario de pantalla", async () => {
+    const result = await saveStaffAction(idleState, staffForm("staff-1"));
+
+    expect(result.status).toBe("success");
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("si el alta falla no encadena con los horarios", async () => {
+    queryResult = { data: null, error: { message: "boom" } };
+
+    const result = await saveStaffAction(idleState, staffForm());
+
+    expect(result.status).toBe("error");
+    expect(redirect).not.toHaveBeenCalled();
+  });
 });
 
 describe("saveScheduleAction", () => {
@@ -101,6 +189,28 @@ describe("saveScheduleAction", () => {
 
     expect(result.status).toBe("error");
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  // Guardar el horario es el último paso de la puesta a punto: terminarlo
+  // devuelve al listado, que es desde donde se sigue trabajando.
+  it("después de guardar vuelve al listado de profesionales", async () => {
+    await saveScheduleAction(
+      idleState,
+      scheduleForm([{ weekday: "1", start: "09:00", end: "13:00" }]),
+    );
+
+    expect(redirect).toHaveBeenCalledWith("/panel/profesionales");
+  });
+
+  it("si la RPC falla no vuelve al listado", async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    await saveScheduleAction(
+      idleState,
+      scheduleForm([{ weekday: "1", start: "09:00", end: "13:00" }]),
+    );
+
+    expect(redirect).not.toHaveBeenCalled();
   });
 
   it("frena en el dominio (solape) sin tocar la base", async () => {
