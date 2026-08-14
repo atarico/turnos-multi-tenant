@@ -20,6 +20,7 @@ vi.mock("@/modules/tenants/application/queries", () => ({
 vi.mock("@/modules/booking/application/queries", () => ({
   listUpcomingBookings: vi.fn(async () => ({ ok: true, value: [] })),
   listBookingsToClose: vi.fn(async () => ({ ok: true, value: [] })),
+  countBookingsOnDay: vi.fn(async () => ({ ok: true, value: 0 })),
   sumMonthlyRevenue: vi.fn(async () => ({
     ok: true,
     value: { totalCents: 0, currency: "ARS" },
@@ -55,6 +56,12 @@ const agendaBooking = (
   endsAt: fromNow(offsetMs + HOUR),
   status: "confirmed",
 });
+
+/** El valor pintado en la tarjeta de métrica con esa etiqueta. */
+function metricValue(label: string): string {
+  const card = screen.getByText(label).closest("div")!.parentElement!;
+  return card.querySelector("p")!.textContent!;
+}
 
 describe("PanelPage", () => {
   it(
@@ -158,6 +165,64 @@ describe("PanelPage", () => {
       ).toHaveLength(1);
       // Una por lista: la acción que vale para un turno futuro sigue estando.
       expect(screen.getAllByRole("button", { name: "Cancelar" })).toHaveLength(2);
+    },
+  );
+
+  // "Turnos hoy" sale de su propia consulta contra la base, NO de filtrar la
+  // lista de próximos turnos. Esa lista corta en `starts_at >= now()`: a las
+  // 23:00 los turnos de las 23:00 ya no están ahí y el contador marcaba 0
+  // mientras el día seguía teniendo dos turnos.
+  it(
+    "cuenta los turnos del día aunque ya no queden próximos turnos",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { countBookingsOnDay, listUpcomingBookings } = await import(
+        "@/modules/booking/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(listUpcomingBookings).mockResolvedValueOnce({
+        ok: true,
+        value: [],
+      });
+      vi.mocked(countBookingsOnDay).mockResolvedValueOnce({ ok: true, value: 2 });
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(metricValue("Turnos hoy")).toBe("2");
+      expect(countBookingsOnDay).toHaveBeenCalledWith(
+        tenant.id,
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        tenant.timezone,
+      );
+    },
+  );
+
+  // Un cero es un dato. Si la consulta falla, decir "0 turnos hoy" es mentirle
+  // al dueño sobre su propio día: mejor admitir que no se pudo leer.
+  it(
+    "muestra — en vez de 0 cuando el conteo del día falla",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { countBookingsOnDay } = await import(
+        "@/modules/booking/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(countBookingsOnDay).mockResolvedValueOnce({
+        ok: false,
+        error: { code: "bookings_count_failed", message: "boom" },
+      });
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(metricValue("Turnos hoy")).toBe("—");
     },
   );
 
