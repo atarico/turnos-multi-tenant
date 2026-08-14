@@ -17,7 +17,7 @@ export const metadata: Metadata = { title: "Profesionales" };
 
 export default async function StaffPage() {
   const tenant = await getCurrentTenant();
-  // Sin negocio no hay equipo: el panel se encarga del onboarding.
+  // Sin negocio no hay equipo: el panel decide a dónde mandarlo.
   if (!tenant) redirect("/panel");
 
   // Las dos consultas son independientes: van en paralelo.

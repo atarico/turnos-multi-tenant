@@ -17,7 +17,7 @@ export const metadata: Metadata = { title: "Servicios" };
 
 export default async function ServicesPage() {
   const tenant = await getCurrentTenant();
-  // Sin negocio no hay catálogo: el panel se encarga del onboarding.
+  // Sin negocio no hay catálogo: el panel decide a dónde mandarlo.
   if (!tenant) redirect("/panel");
 
   const result = await listCatalogServices(tenant.id);

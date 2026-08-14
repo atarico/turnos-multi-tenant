@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -27,7 +28,6 @@ import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 import { displayBookingUrl, publicBookingUrl } from "@/modules/tenants/domain/public-url";
-import { OnboardingForm } from "@/modules/tenants/ui/onboarding-form";
 import { PublicLinkDialog } from "@/modules/tenants/ui/public-link-dialog";
 
 /** Instante ISO → "YYYY-MM-DD" civil en la tz del negocio. */
@@ -66,19 +66,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   const tenant = await getCurrentTenant();
 
   // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
-  if (!tenant) {
-    return (
-      <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">
-          Creá tu negocio
-        </h1>
-        <p className="mt-2 text-sm text-muted">Un último paso para arrancar.</p>
-        <div className="mt-6">
-          <OnboardingForm />
-        </div>
-      </div>
-    );
-  }
+  if (!tenant) redirect("/panel/bienvenida");
 
   const [bookingsResult, toCloseResult, revenueResult] = await Promise.all([
     listUpcomingBookings(tenant.id),
