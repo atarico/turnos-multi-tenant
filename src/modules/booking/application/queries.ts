@@ -1,7 +1,7 @@
 import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 
-import { resolveMonthRange } from "../domain/day-range";
+import { resolveDayRange, resolveMonthRange } from "../domain/day-range";
 import type {
   AgendaBooking,
   BookableService,
@@ -289,6 +289,65 @@ export async function getBooking(
     serviceId: row.service_id,
     staffId: row.staff_id,
   });
+}
+
+/**
+ * Estados que el día efectivamente TUVO. A los que ocupan agenda se les suma
+ * `completed`: el turno ya se atendió, pero el trabajo lo tuvo el día igual.
+ * `cancelled` y `no_show` quedan afuera porque son trabajo que NO ocurrió.
+ */
+const DAY_STATUSES: BookingStatus[] = [...LIVE_STATUSES, "completed"];
+
+/**
+ * Cuántos turnos tiene el negocio en un día civil suyo.
+ *
+ * Existe porque el panel contaba filtrando la lista de PRÓXIMOS turnos, y esa
+ * lista arranca en `starts_at >= now()`: un turno de las 23:00 visto a las
+ * 23:00 ya había arrancado, ya se había mudado a "turnos a cerrar", y el
+ * contador mostraba 0 mientras el día seguía teniendo dos turnos. El número
+ * decía "turnos vivos que todavía faltan hoy", no "turnos de hoy".
+ *
+ * La ventana es el día civil COMPLETO del NEGOCIO (ver `resolveDayRange`), no
+ * el del servidor: un turno del 15 a las 23:00 en Buenos Aires es del 16 en
+ * UTC. El día del turno lo decide `starts_at`, igual que en los ingresos: uno
+ * que arranca a las 23:30 y termina pasada la medianoche es del día en que
+ * empezó.
+ *
+ * El conteo lo hace Postgres (`head: true` + `count: exact`), no esta función.
+ * Traer las filas para contarlas acá se rompería contra el `max_rows` de
+ * PostgREST (1000), que recorta la respuesta SIN devolver error: un día
+ * cargado habría mostrado menos turnos de los reales, en silencio. A
+ * diferencia de los ingresos no hace falta un RPC — contar es lo único que
+ * PostgREST ya sabe agregar solo, y una función nueva en la base sería
+ * infraestructura por gusto.
+ */
+export async function countBookingsOnDay(
+  tenantId: string,
+  dayStr: string,
+  timezone: string,
+): Promise<Result<number>> {
+  const range = resolveDayRange(dayStr, timezone);
+  if (!range) {
+    return err(appError("invalid_day", "No pudimos resolver el día."));
+  }
+
+  const supabase = await createClient();
+  const { count, error } = await supabase
+    .from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .in("status", DAY_STATUSES)
+    .gte("starts_at", range.startIso)
+    .lt("starts_at", range.endIso);
+
+  // `count` en null es una respuesta sin número: devolver 0 ahí sería inventar
+  // un día vacío. Que falle y que el panel lo admita.
+  if (error || count === null) {
+    return err(
+      appError("bookings_count_failed", "No pudimos contar los turnos del día."),
+    );
+  }
+  return ok(count);
 }
 
 /** Total cobrado en un mes, con la moneda en la que se cobró. */

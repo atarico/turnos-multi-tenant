@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getBooking, listUpcomingBookings, sumMonthlyRevenue } from "./queries";
+import {
+  countBookingsOnDay,
+  getBooking,
+  listUpcomingBookings,
+  sumMonthlyRevenue,
+} from "./queries";
 
 /**
  * Tests de la métrica de ingresos.
@@ -31,6 +36,11 @@ const rpc = vi.fn<RpcCall>(async () => ({ data: rows, error: queryError }));
  */
 let fromData: unknown = [];
 let fromError: { message: string } | null = null;
+/**
+ * Lo que devuelve una consulta `head: true`: sin filas, sólo el total que contó
+ * Postgres. `null` es la respuesta real de PostgREST cuando no se pidió conteo.
+ */
+let fromCount: number | null = null;
 
 interface Builder {
   select: ReturnType<typeof vi.fn>;
@@ -41,7 +51,11 @@ interface Builder {
   order: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
   then: (
-    resolve: (v: { data: unknown; error: typeof fromError }) => unknown,
+    resolve: (v: {
+      data: unknown;
+      error: typeof fromError;
+      count: number | null;
+    }) => unknown,
   ) => unknown;
 }
 
@@ -52,7 +66,11 @@ function makeBuilder(): Builder {
   }
   builder.maybeSingle = vi.fn(async () => ({ data: fromData, error: fromError }));
   builder.then = (resolve) =>
-    Promise.resolve({ data: fromData, error: fromError }).then(resolve);
+    Promise.resolve({
+      data: fromData,
+      error: fromError,
+      count: fromCount,
+    }).then(resolve);
   return builder;
 }
 
@@ -65,12 +83,22 @@ vi.mock("@/lib/supabase/server", () => ({
 /** Los argumentos con los que se llamó al RPC. */
 const rpcArgs = () => rpc.mock.calls[0]![1];
 
+/** El builder de la última consulta `.from(...)`. */
+const lastBuilder = () =>
+  from.mock.results[from.mock.results.length - 1]!.value as Builder;
+
 /** La cadena `.select(...)` con la que se armó la última consulta `.from(...)`. */
-const lastSelect = () => {
-  const builder = from.mock.results[from.mock.results.length - 1]!
-    .value as Builder;
-  return builder.select.mock.calls[0]![0] as string;
-};
+const lastSelect = () => lastBuilder().select.mock.calls[0]![0] as string;
+
+/** Las opciones de `.select(cols, opciones)` — ahí viaja el `count`/`head`. */
+const lastSelectOptions = () =>
+  lastBuilder().select.mock.calls[0]![1] as
+    | { count?: string; head?: boolean }
+    | undefined;
+
+/** El primer argumento con que se llamó a un filtro de la última consulta. */
+const filterArg = (method: "eq" | "in" | "gte" | "lt", index = 0) =>
+  lastBuilder()[method].mock.calls[index]?.[1] as unknown;
 
 beforeEach(() => {
   rows = [];
@@ -78,6 +106,7 @@ beforeEach(() => {
   rpc.mockClear();
   fromData = [];
   fromError = null;
+  fromCount = null;
   from.mockClear();
 });
 
@@ -159,6 +188,105 @@ describe("sumMonthlyRevenue", () => {
     rows = null;
 
     const result = await sumMonthlyRevenue("tenant-1", "2026-09", AR);
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+/**
+ * Tests del contador "Turnos hoy".
+ *
+ * La métrica responde "cuánto trabajo tiene el día", no "cuánto queda por
+ * delante": por eso la ventana es el día civil COMPLETO del negocio y no
+ * arranca en `now()`. Antes el panel filtraba la lista de próximos turnos, que
+ * corta en `starts_at >= now()`: a las 23:00 los dos turnos de las 23:00 ya
+ * habían arrancado, se habían mudado a "turnos a cerrar" y el contador decía 0.
+ *
+ * Igual que en ingresos, el conteo lo hace la BASE: contar filas traídas se
+ * rompe contra el `max_rows` de PostgREST (1000) sin devolver error.
+ */
+describe("countBookingsOnDay", () => {
+  it("delegates the count to the database instead of fetching rows", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(lastSelectOptions()).toMatchObject({ count: "exact", head: true });
+  });
+
+  it("returns the count the database reported", async () => {
+    fromCount = 7;
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toBe(7);
+  });
+
+  it("scopes the query to the tenant", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("eq")).toBe("tenant-1");
+  });
+
+  // El defecto original: un turno de las 23:00 visto a las 23:00 ya arrancó y
+  // ya terminó. Sigue siendo trabajo de hoy, así que sigue contando — la cota
+  // baja es la medianoche del negocio, nunca `now()`.
+  it("counts a booking that already started and ended earlier today", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("gte")).toBe("2026-09-15T03:00:00.000Z");
+  });
+
+  // Y la cota alta es exclusiva: el turno de mañana a las 00:00 es de mañana.
+  it("stops at the start of the next civil day, exclusive", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("lt")).toBe("2026-09-16T03:00:00.000Z");
+  });
+
+  // El día lo decide la timezone del NEGOCIO, no la del servidor: el mismo
+  // "2026-09-15" empieza y termina en otro instante en Santiago que en Buenos
+  // Aires, y el contador tiene que moverse con el negocio.
+  it("lets the tenant's timezone decide the day boundary", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", "Pacific/Auckland");
+
+    expect(filterArg("gte")).toBe("2026-09-14T12:00:00.000Z");
+    expect(filterArg("lt")).toBe("2026-09-15T12:00:00.000Z");
+  });
+
+  // 'completed' cuenta: el turno pasó, el trabajo lo tuvo el día igual.
+  // 'cancelled'/'no_show' no: son trabajo que el día NO tuvo.
+  it("counts completed bookings but not cancelled or no-show ones", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    const statuses = filterArg("in") as string[];
+    expect(statuses).toContain("completed");
+    expect(statuses).toContain("pending");
+    expect(statuses).toContain("confirmed");
+    expect(statuses).not.toContain("cancelled");
+    expect(statuses).not.toContain("no_show");
+  });
+
+  it("fails without touching the database when the day is malformed", async () => {
+    const result = await countBookingsOnDay("tenant-1", "2026-02-30", AR);
+
+    expect(result.ok).toBe(false);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("fails when the query errors", async () => {
+    fromError = { message: "boom" };
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(result.ok).toBe(false);
+  });
+
+  // Sin conteo no hay número: un 0 inventado es un dato falso, y el panel
+  // prefiere admitir que no pudo leer.
+  it("fails when the database reports no count at all", async () => {
+    fromCount = null;
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
 
     expect(result.ok).toBe(false);
   });

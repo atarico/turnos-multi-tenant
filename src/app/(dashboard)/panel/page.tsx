@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { signOutAction } from "@/modules/auth/application/actions";
 import {
+  countBookingsOnDay,
   listBookingsToClose,
   listUpcomingBookings,
   sumMonthlyRevenue,
@@ -30,18 +31,13 @@ import type { PlanTier } from "@/modules/tenants/domain/types";
 import { displayBookingUrl, publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import { PublicLinkDialog } from "@/modules/tenants/ui/public-link-dialog";
 
-/** Instante ISO → "YYYY-MM-DD" civil en la tz del negocio. */
-function civilDay(iso: string | number, timezone: string): string {
-  return format(new TZDate(new Date(iso).getTime(), timezone), "yyyy-MM-dd");
-}
-
 /**
- * "Hoy" civil en la tz del negocio. Aislado en su propia función porque leer
- * el reloj es request-time: legítimo en un Server Component (render dinámico),
- * pero no debe vivir en el cuerpo "puro" del componente.
+ * "Hoy" civil en la tz del negocio, "YYYY-MM-DD". Aislado en su propia función
+ * porque leer el reloj es request-time: legítimo en un Server Component (render
+ * dinámico), pero no debe vivir en el cuerpo "puro" del componente.
  */
 function todayInTz(timezone: string): string {
-  return civilDay(Date.now(), timezone);
+  return format(new TZDate(Date.now(), timezone), "yyyy-MM-dd");
 }
 
 /** Mes civil en curso en la tz del negocio, "YYYY-MM". Request-time, igual que `todayInTz`. */
@@ -68,15 +64,17 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
   if (!tenant) redirect("/panel/bienvenida");
 
-  const [bookingsResult, toCloseResult, revenueResult] = await Promise.all([
-    listUpcomingBookings(tenant.id),
-    listBookingsToClose(tenant.id),
-    sumMonthlyRevenue(
-      tenant.id,
-      currentMonthInTz(tenant.timezone),
-      tenant.timezone,
-    ),
-  ]);
+  const [bookingsResult, toCloseResult, todayCountResult, revenueResult] =
+    await Promise.all([
+      listUpcomingBookings(tenant.id),
+      listBookingsToClose(tenant.id),
+      countBookingsOnDay(tenant.id, todayInTz(tenant.timezone), tenant.timezone),
+      sumMonthlyRevenue(
+        tenant.id,
+        currentMonthInTz(tenant.timezone),
+        tenant.timezone,
+      ),
+    ]);
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
@@ -85,6 +83,11 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   const ingresos = revenueResult.ok
     ? formatPrice(revenueResult.value.totalCents, revenueResult.value.currency)
     : "—";
+
+  // Mismo criterio que con los ingresos: el conteo lo hace la base, y si no
+  // vuelve, "—". Decir "0 turnos hoy" cuando la consulta falló le miente al
+  // dueño sobre su propio día.
+  const turnosHoy = todayCountResult.ok ? String(todayCountResult.value) : "—";
 
   // Literal member access (not `serverEnv()`): panel pages don't otherwise
   // depend on the service-role env surface, and this keeps them free of it.
@@ -97,10 +100,6 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   const origin = configuredOrigin || "http://localhost:3000";
   const publicUrl = publicBookingUrl(origin, tenant.slug);
 
-  const todayStr = todayInTz(tenant.timezone);
-  const turnosHoy = bookings.filter(
-    (b) => civilDay(b.startsAt, tenant.timezone) === todayStr,
-  ).length;
   const proximoTurno = bookings[0]
     ? format(
         new TZDate(new Date(bookings[0].startsAt).getTime(), tenant.timezone),
@@ -168,7 +167,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
         <MetricCard
           icon={<CalendarDays className="size-5" />}
           label="Turnos hoy"
-          value={String(turnosHoy)}
+          value={turnosHoy}
         />
         <MetricCard
           icon={<Wallet className="size-5" />}
