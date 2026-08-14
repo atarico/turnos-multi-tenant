@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AgendaBooking } from "@/modules/booking/domain/types";
 import { publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
@@ -37,6 +38,23 @@ const tenant: Tenant = {
   created_at: "2024-01-01T00:00:00.000Z",
   updated_at: "2024-01-01T00:00:00.000Z",
 };
+
+const HOUR = 3_600_000;
+const fromNow = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+
+const agendaBooking = (
+  id: string,
+  offsetMs: number,
+): AgendaBooking => ({
+  id,
+  customerName: `Cliente ${id}`,
+  customerPhone: null,
+  serviceName: "Corte",
+  staffName: "Ana",
+  startsAt: fromNow(offsetMs),
+  endsAt: fromNow(offsetMs + HOUR),
+  status: "confirmed",
+});
 
 describe("PanelPage", () => {
   it(
@@ -101,6 +119,45 @@ describe("PanelPage", () => {
       );
 
       expect(screen.getByText(/URL para clientes/i)).toBeInTheDocument();
+    },
+  );
+
+  // Las dos listas del panel comparten `withActions`, pero no comparten
+  // momento: "Turnos a cerrar" son turnos que ya pasaron y "Próximos turnos"
+  // son turnos que no. Cerrar sólo tiene sentido en la primera; cancelar, en
+  // las dos — por eso la de próximos conserva sus acciones.
+  it(
+    "ofrece cerrar los turnos vencidos y sólo cancelar los próximos",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { listBookingsToClose, listUpcomingBookings } = await import(
+        "@/modules/booking/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(listBookingsToClose).mockResolvedValueOnce({
+        ok: true,
+        value: [agendaBooking("vencido", -2 * HOUR)],
+      });
+      vi.mocked(listUpcomingBookings).mockResolvedValueOnce({
+        ok: true,
+        value: [agendaBooking("proximo", HOUR)],
+      });
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.getByText("Turnos a cerrar")).toBeInTheDocument();
+      expect(
+        screen.getAllByRole("button", { name: "Completar" }),
+      ).toHaveLength(1);
+      expect(
+        screen.getAllByRole("button", { name: "No asistió" }),
+      ).toHaveLength(1);
+      // Una por lista: la acción que vale para un turno futuro sigue estando.
+      expect(screen.getAllByRole("button", { name: "Cancelar" })).toHaveLength(2);
     },
   );
 

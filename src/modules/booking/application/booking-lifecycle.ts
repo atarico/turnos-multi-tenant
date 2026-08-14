@@ -10,6 +10,7 @@ import { friendlyRescheduleError } from "../domain/booking-errors";
 import {
   canReschedule,
   canTransition,
+  canTransitionAt,
   isBookingStatus,
 } from "../domain/booking-transitions";
 import type { BookingStatus } from "../domain/types";
@@ -69,6 +70,19 @@ export async function updateBookingStatusAction(
   if (!canTransition(current.value.status, nextStatus)) {
     return errorState(
       "Ese turno ya está cerrado o no admite ese cambio. Recargá la agenda.",
+    );
+  }
+
+  // El estado destino pasa el filtro de estado pero no el del reloj: cerrar un
+  // turno es contar lo que pasó en la silla, y todavía no pasó. Mensaje aparte
+  // del de arriba porque la salida es otra — acá no hay que recargar nada, hay
+  // que esperar. `ends_at` también se relee de la base: el horario del turno es
+  // tan poco confiable como su estado si viene del formulario.
+  if (
+    !canTransitionAt(current.value.status, nextStatus, current.value.endsAt)
+  ) {
+    return errorState(
+      "Ese turno todavía no terminó: vas a poder cerrarlo cuando pase su horario.",
     );
   }
 

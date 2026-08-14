@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { updateBookingStatusAction } from "../application/booking-lifecycle";
 import {
   BOOKING_ACTION_LABELS,
-  allowedTransitions,
+  allowedTransitionsAt,
   canReschedule,
 } from "../domain/booking-transitions";
 import type { AgendaBooking, BookingStatus } from "../domain/types";
@@ -30,9 +30,17 @@ const VARIANTS: Partial<
 /**
  * Acciones de ciclo de vida de UN turno de la agenda.
  *
- * Los botones que se muestran salen de `allowedTransitions`, la misma regla de
- * dominio que valida la Server Action: la UI no puede ofrecer un cambio que el
- * servidor va a rechazar. Un turno ya cerrado no renderiza nada.
+ * Los botones que se muestran salen de `allowedTransitionsAt`, la misma regla
+ * de dominio que valida la Server Action: la UI no puede ofrecer un cambio que
+ * el servidor va a rechazar. Un turno ya cerrado no renderiza nada, y uno que
+ * todavía no ocurrió muestra sólo lo que se decide sobre el futuro (confirmar,
+ * cancelar, reprogramar) — nunca "Completar" ni "No asistió".
+ *
+ * El reloj se lee en el render, no llega por prop: la lista se pinta en el
+ * servidor y se hidrata en el cliente, así que ninguno de los dos instantes es
+ * "el" momento. Si un turno vence justo entre los dos, el peor caso es un botón
+ * de más o de menos por unos segundos; el guard autoritativo está en la Server
+ * Action, que relee `ends_at` de la base.
  *
  * Un solo `<form>` con varios submit: el `name`/`value` del botón apretado es
  * lo que viaja como `status`, así no hace falta un form por acción.
@@ -43,7 +51,7 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
     idleState,
   );
 
-  const transitions = allowedTransitions(booking.status);
+  const transitions = allowedTransitionsAt(booking.status, booking.endsAt);
   if (transitions.length === 0) return null;
 
   return (
