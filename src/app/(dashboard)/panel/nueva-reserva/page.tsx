@@ -30,7 +30,7 @@ const panelActions: BookingActions = {
 export default async function NuevaReservaPage() {
   const tenant = await getCurrentTenant();
 
-  // Sin negocio no hay agenda que cargar: de vuelta al onboarding del panel.
+  // Sin negocio no hay agenda que cargar: el panel decide a dónde mandarlo.
   if (!tenant) redirect("/panel");
 
   const servicesResult = await listServices(tenant.id);

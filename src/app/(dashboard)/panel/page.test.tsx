@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
+// `redirect()` real corta el render lanzando: si el mock devolviera undefined
+// la page seguiría ejecutándose con `tenant` en null y reventaría por otro lado.
+const redirect = vi.fn((path: string): never => {
+  throw new Error(`NEXT_REDIRECT:${path}`);
+});
+vi.mock("next/navigation", () => ({
+  redirect: (path: string) => redirect(path),
+}));
+
 vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: vi.fn(),
 }));
@@ -30,6 +39,23 @@ const tenant: Tenant = {
 };
 
 describe("PanelPage", () => {
+  it(
+    "manda a la bienvenida cuando la cuenta todavía no tiene negocio",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(null);
+      const { default: PanelPage } = await import("./page");
+
+      await expect(
+        PanelPage({ searchParams: Promise.resolve({}) }),
+      ).rejects.toThrow("NEXT_REDIRECT:/panel/bienvenida");
+      expect(redirect).toHaveBeenCalledWith("/panel/bienvenida");
+    },
+  );
+
   // Timeout raised: this test measures ~5.0s under full-suite CPU contention
   // (passes in ~2.9s isolated), so the default 5000ms flakes intermittently.
   it(
