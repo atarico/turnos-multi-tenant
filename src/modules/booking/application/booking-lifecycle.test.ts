@@ -57,17 +57,33 @@ vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: () => getCurrentTenant(),
 }));
 
+const HOUR = 3_600_000;
+/** Instante relativo al reloj real: los fixtures no caducan con el calendario. */
+const fromNow = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+
+/**
+ * El turno base YA TERMINÓ. Cerrarlo (completado / no asistió) sólo es válido
+ * sobre un turno pasado, así que ese es el caso por defecto; el futuro se pide
+ * explícito con `upcoming`.
+ */
 const booking = {
   id: "booking-1",
   customerName: "Ana",
   customerPhone: null,
   serviceName: "Corte",
   staffName: "Vale",
-  startsAt: "2026-09-01T13:00:00.000Z",
-  endsAt: "2026-09-01T14:00:00.000Z",
+  startsAt: fromNow(-2 * HOUR),
+  endsAt: fromNow(-HOUR),
   status: "confirmed" as const,
   serviceId: "service-1",
   staffId: "staff-1",
+};
+
+/** El mismo turno, todavía por delante. */
+const upcoming = {
+  ...booking,
+  startsAt: fromNow(HOUR),
+  endsAt: fromNow(2 * HOUR),
 };
 
 const getBooking = vi.fn(async (): Promise<unknown> => ok(booking));
@@ -124,6 +140,59 @@ describe("updateBookingStatusAction", () => {
 
     expect(result.status).toBe("error");
     expect(update).not.toHaveBeenCalled();
+  });
+
+  // El agujero que motivó estos tests: un turno del 20 se marcó completado hoy.
+  // Un 'completed' suma a los ingresos del mes y bloquea para siempre el
+  // borrado del servicio y del profesional, así que no alcanza con esconder el
+  // botón: el POST armado a mano tiene que rebotar acá.
+  it.each(["completed", "no_show"])(
+    "no marca como %s un turno que todavía no terminó, sin tocar la base",
+    async (status) => {
+      getBooking.mockResolvedValue(ok(upcoming));
+
+      const result = await updateBookingStatusAction(idleState, statusForm(status));
+
+      expect(result.status).toBe("error");
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cierra un turno apenas pasa su hora de fin", async () => {
+    getBooking.mockResolvedValue(ok({ ...booking, endsAt: fromNow(0) }));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("completed"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "completed" });
+  });
+
+  // Cancelar un turno futuro es el caso NORMAL: el cliente avisa que no viene.
+  it("sí deja cancelar un turno que todavía no ocurrió", async () => {
+    getBooking.mockResolvedValue(ok(upcoming));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("cancelled"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
+  it("sí deja confirmar un turno que todavía no ocurrió", async () => {
+    getBooking.mockResolvedValue(ok({ ...upcoming, status: "pending" }));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("confirmed"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "confirmed" });
   });
 
   it("rechaza un estado que no existe en el enum, sin tocar la base", async () => {
