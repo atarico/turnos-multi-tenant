@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonClasses } from "@/components/ui/button";
+import { buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 const STEPS = [
@@ -41,13 +41,14 @@ export default function HomePage() {
           Turnos<span className="text-gold">.</span>
         </span>
         <nav className="flex items-center gap-2">
-          <Link href="/ingresar">
-            <Button variant="ghost" size="sm">
-              Ingresar
-            </Button>
+          <Link
+            href="/ingresar"
+            className={buttonClasses({ variant: "ghost", size: "sm" })}
+          >
+            Ingresar
           </Link>
-          <Link href="/registro">
-            <Button size="sm">Crear mi negocio</Button>
+          <Link href="/registro" className={buttonClasses({ size: "sm" })}>
+            Crear mi negocio
           </Link>
         </nav>
       </header>

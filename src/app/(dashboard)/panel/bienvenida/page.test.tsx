@@ -1,13 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { throwingRedirectSpy } from "@/test-support/next-navigation";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
-// `redirect()` real corta el render lanzando: si el mock devolviera undefined
-// la page seguiría renderizando el onboarding a alguien que ya tiene negocio.
-const redirect = vi.fn((path: string): never => {
-  throw new Error(`NEXT_REDIRECT:${path}`);
-});
+const redirect = throwingRedirectSpy();
 vi.mock("next/navigation", () => ({
   redirect: (path: string) => redirect(path),
 }));

@@ -84,6 +84,30 @@ describe("ServiceForm", () => {
     expect(screen.getByText("El nombre es muy corto")).toBeInTheDocument();
   });
 
+  // Un negocio con servicios y sin profesionales no puede recibir una sola
+  // reserva: guardar un servicio es el momento exacto para empujar el paso que
+  // falta, en vez de dejar la pantalla sin salida.
+  it("ofrece agregar un profesional después de guardar el servicio", async () => {
+    const save = spySave({ status: "success", message: "Servicio creado." });
+    const user = userEvent.setup();
+    render(<ServiceForm service={null} save={save} onCancel={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Crear servicio" }));
+
+    expect(await screen.findByText("Servicio creado.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Agregar un profesional" }),
+    ).toHaveAttribute("href", "/panel/profesionales");
+  });
+
+  it("no muestra el próximo paso mientras no se guardó nada", () => {
+    render(<ServiceForm service={null} save={spySave()} onCancel={vi.fn()} />);
+
+    expect(
+      screen.queryByRole("link", { name: "Agregar un profesional" }),
+    ).toBeNull();
+  });
+
   it("lets the user drop out of edit mode", async () => {
     const onCancel = vi.fn();
     const user = userEvent.setup();
