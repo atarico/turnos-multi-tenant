@@ -31,10 +31,16 @@ const DEFAULT_WINDOW = { startTime: "09:00", endTime: "13:00" };
  * es una sola cosa, y editarlo de a pedazos deja estados intermedios (un día
  * sin franjas a mitad de camino) que no significan nada para el negocio.
  *
- * Los `<input>` son NO controlados a propósito: el estado sólo lleva qué filas
- * existen, y los valores los lee el FormData del DOM al enviar. Por eso la
- * `key` tiene que ser estable — con el índice, borrar una fila del medio le
- * correría los valores tipeados a las de abajo.
+ * Los `<input>` son CONTROLADOS: React 19 resetea el formulario solo al correr
+ * una Server Action, y en ese reset un input no controlado vuelve a su
+ * `defaultValue` — es decir, al horario con el que se abrió la pantalla, no al
+ * que se acaba de guardar. Teniendo los valores en el estado el reset queda
+ * inofensivo, porque React mantiene el `defaultValue` del DOM en sincronía con
+ * el valor controlado. Por eso `windows` sólo siembra el estado inicial: a
+ * partir de ahí lo que se ve es lo que se editó, que es lo que se guardó.
+ *
+ * La `key` tiene que ser estable igual — con el índice, borrar una fila del
+ * medio le correría los valores tipeados a las de abajo.
  */
 export function ScheduleEditor({ staffId, windows, save }: ScheduleEditorProps) {
   const [state, action, pending] = useActionState(save, idleState);
@@ -50,6 +56,15 @@ export function ScheduleEditor({ staffId, windows, save }: ScheduleEditorProps) 
 
   const removeWindow = (key: string) =>
     setRows((current) => current.filter((row) => row.key !== key));
+
+  const changeTime = (
+    key: string,
+    field: "startTime" | "endTime",
+    value: string,
+  ) =>
+    setRows((current) =>
+      current.map((row) => (row.key === key ? { ...row, [field]: value } : row)),
+    );
 
   return (
     <form action={action} className="space-y-4">
@@ -89,13 +104,17 @@ export function ScheduleEditor({ staffId, windows, save }: ScheduleEditorProps) 
                     <TimeField
                       label="Desde"
                       name="startTime"
-                      defaultValue={row.startTime}
+                      value={row.startTime}
+                      onChange={(value) =>
+                        changeTime(row.key, "startTime", value)
+                      }
                     />
                     <span className="text-muted">→</span>
                     <TimeField
                       label="Hasta"
                       name="endTime"
-                      defaultValue={row.endTime}
+                      value={row.endTime}
+                      onChange={(value) => changeTime(row.key, "endTime", value)}
                     />
                     <button
                       type="button"
@@ -134,18 +153,21 @@ export function ScheduleEditor({ staffId, windows, save }: ScheduleEditorProps) 
 function TimeField({
   label,
   name,
-  defaultValue,
+  value,
+  onChange,
 }: {
   label: string;
   name: string;
-  defaultValue: string;
+  value: string;
+  onChange: (value: string) => void;
 }) {
   return (
     <input
       type="time"
       name={name}
       aria-label={label}
-      defaultValue={defaultValue}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
       className="h-10 rounded-xl border border-border bg-surface-2 px-3 text-sm text-foreground focus:border-gold/50 focus:outline-none focus:ring-2 focus:ring-gold/15"
     />
   );
