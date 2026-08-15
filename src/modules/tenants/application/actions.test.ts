@@ -26,11 +26,17 @@ const rpc = vi.fn(async () => ({
 }));
 
 /**
- * Doble de `.from(...).update(...).eq(...)`. En el cliente real el `.eq()` final
- * es el terminal de un UPDATE: ahí es donde se resuelve la promesa.
+ * Doble de `.from(...).update(...).eq(...).select(...)`.
+ *
+ * El `.select()` al final del UPDATE no es decorativo: sin él, PostgREST no
+ * informa cuántas filas tocó, y un UPDATE que RLS recorta a CERO filas vuelve
+ * con `error: null` — indistinguible de uno que escribió. Por eso el doble
+ * modela las filas devueltas, no sólo el error.
  */
 let updateError: { message: string } | null = null;
-const eq = vi.fn(async () => ({ error: updateError }));
+let updatedRows: Array<{ id: string }> = [{ id: "tenant-1" }];
+const select = vi.fn(async () => ({ data: updatedRows, error: updateError }));
+const eq = vi.fn(() => ({ select }));
 const update = vi.fn(() => ({ eq }));
 const from = vi.fn(() => ({ update }));
 
@@ -61,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   rpc.mockResolvedValue({ error: null });
   updateError = null;
+  updatedRows = [{ id: "tenant-1" }];
   getCurrentTenant.mockResolvedValue(tenantStub);
 });
 
@@ -131,6 +138,27 @@ describe("updateBrandingAction", () => {
 
     expect(result.status).toBe("error");
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El caso silencioso: PostgREST devuelve `error: null` cuando RLS recorta el
+   * UPDATE a cero filas. Sin mirar las filas devueltas, la acción respondía
+   * "listo, guardamos tu color" sin haber guardado nada — una pantalla de
+   * configuración que miente sobre lo que persistió es peor que una que falla.
+   */
+  it("no dice que guardó cuando la base no tocó ninguna fila", async () => {
+    updatedRows = [];
+
+    const result = await updateBrandingAction(idleState, brandForm("#6366f1"));
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("pide de vuelta la fila para poder contar lo que escribió", async () => {
+    await updateBrandingAction(idleState, brandForm("#6366f1"));
+
+    expect(select).toHaveBeenCalled();
   });
 
   it("falla sin tocar la base cuando el usuario no tiene negocio", async () => {

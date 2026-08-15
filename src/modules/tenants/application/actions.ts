@@ -97,12 +97,26 @@ export async function updateBrandingAction(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("tenants")
     .update({ brand_color: brandColor })
-    .eq("id", tenant.id);
+    .eq("id", tenant.id)
+    .select("id");
 
   if (error) {
+    return errorState("No pudimos guardar el color. Intentá de nuevo.");
+  }
+
+  /**
+   * `error: null` NO alcanza para afirmar que se escribió.
+   *
+   * Cuando RLS recorta un UPDATE a cero filas, PostgREST no lo trata como
+   * error: devuelve éxito con un conjunto vacío. Sin el `.select("id")` de
+   * arriba no habría con qué distinguirlo, y la pantalla diría "guardado" sobre
+   * una escritura que no ocurrió. Una configuración que miente sobre lo que
+   * persistió es peor que una que falla de frente.
+   */
+  if (!data || data.length === 0) {
     return errorState("No pudimos guardar el color. Intentá de nuevo.");
   }
 

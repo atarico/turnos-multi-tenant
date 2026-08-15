@@ -1,4 +1,8 @@
-import { readableTextOn } from "@/modules/tenants/domain/brand";
+import {
+  DEFAULT_BRAND_COLOR,
+  normalizeBrandColor,
+  readableTextOn,
+} from "@/modules/tenants/domain/brand";
 
 interface PublicHeaderProps {
   name: string;
@@ -21,7 +25,18 @@ interface PublicHeaderProps {
  * ningún lado. La etiqueta "Reservá tu turno" lo muestra siempre.
  */
 export function PublicHeader({ name, logoUrl, brandColor }: PublicHeaderProps) {
-  const onBrand = readableTextOn(brandColor);
+  /**
+   * El fondo se normaliza acá, no sólo el texto. `readableTextOn` ya cae a
+   * blanco ante un color inválido, pero si el FONDO siguiera siendo ese valor
+   * inválido el navegador lo descartaría y quedaría texto blanco sobre el fondo
+   * de la página. Los dos tienen que caer juntos para que el par cierre.
+   *
+   * Hoy es defensivo —la columna es NOT NULL con default y la única escritura
+   * pasa por `updateBrandingAction`— pero esta página la ven los clientes del
+   * negocio y no cuesta nada sostener la invariante en el borde.
+   */
+  const background = normalizeBrandColor(brandColor) ?? DEFAULT_BRAND_COLOR;
+  const onBrand = readableTextOn(background);
 
   return (
     <header className="flex items-center gap-4">
@@ -39,7 +54,7 @@ export function PublicHeader({ name, logoUrl, brandColor }: PublicHeaderProps) {
         <span
           aria-hidden
           className="flex size-14 shrink-0 items-center justify-center rounded-2xl font-display text-xl font-semibold"
-          style={{ backgroundColor: brandColor, color: onBrand }}
+          style={{ backgroundColor: background, color: onBrand }}
         >
           {name.charAt(0).toUpperCase()}
         </span>
@@ -48,7 +63,7 @@ export function PublicHeader({ name, logoUrl, brandColor }: PublicHeaderProps) {
       <div className="min-w-0">
         <p
           className="inline-block rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-widest"
-          style={{ backgroundColor: brandColor, color: onBrand }}
+          style={{ backgroundColor: background, color: onBrand }}
         >
           Reservá tu turno
         </p>

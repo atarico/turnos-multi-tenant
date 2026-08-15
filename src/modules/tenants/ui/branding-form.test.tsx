@@ -79,6 +79,55 @@ describe("BrandingForm", () => {
     ).not.toBeInTheDocument();
   });
 
+  /**
+   * El flujo REAL, que ningún test cubría: el usuario cambia el color, guarda,
+   * y el server component se vuelve a renderizar con el color ya guardado
+   * gracias al `revalidatePath` de la action. El `rerender` con el nuevo
+   * `brandColor` simula exactamente ese refresco.
+   *
+   * Es la mitad que importa de `showSuccess`: sin ella sólo estaba probado el
+   * caso trivial en que el usuario guarda sin haber cambiado nada.
+   */
+  it("confirma el guardado cuando el servidor devuelve el color nuevo", async () => {
+    const save = spySave({
+      status: "success",
+      message: "Listo, guardamos tu color.",
+    });
+    const { rerender } = render(
+      <BrandingForm brandColor="#aabbcc" save={save} />,
+    );
+
+    fireEvent.change(colorInput(), { target: { value: "#ff0000" } });
+    await userEvent.click(screen.getByRole("button", { name: /guardar/i }));
+
+    rerender(<BrandingForm brandColor="#ff0000" save={save} />);
+
+    expect(
+      await screen.findByText("Listo, guardamos tu color."),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * La contracara, documentada a propósito: el cartel depende de que el prop
+   * llegue refrescado. Si el servidor confirmara el guardado pero devolviera el
+   * color viejo, no habría confirmación en pantalla. Queda pinchado acá para
+   * que el acoplamiento sea visible y no una sorpresa.
+   */
+  it("no confirma si el servidor dice ok pero devuelve el color viejo", async () => {
+    const save = spySave({
+      status: "success",
+      message: "Listo, guardamos tu color.",
+    });
+    render(<BrandingForm brandColor="#aabbcc" save={save} />);
+
+    fireEvent.change(colorInput(), { target: { value: "#ff0000" } });
+    await userEvent.click(screen.getByRole("button", { name: /guardar/i }));
+
+    expect(
+      screen.queryByText("Listo, guardamos tu color."),
+    ).not.toBeInTheDocument();
+  });
+
   it("manda el color al servidor bajo el nombre que la acción espera", async () => {
     const save = spySave();
     render(<BrandingForm brandColor="#aabbcc" save={save} />);

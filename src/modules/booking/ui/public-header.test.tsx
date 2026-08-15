@@ -72,4 +72,19 @@ describe("PublicHeader", () => {
       color: "#ffffff",
     });
   });
+
+  /**
+   * Fondo y texto tienen que caer JUNTOS. Si sólo cayera el texto, el navegador
+   * descartaría el fondo inválido y quedaría texto blanco sobre el fondo de la
+   * página. Defensivo, pero esta página la ven los clientes del negocio.
+   */
+  it("falls back to a usable pair when the stored colour is not a colour", () => {
+    render(
+      <PublicHeader name="Acme" logoUrl={null} brandColor="rgb(1,2,3); evil" />,
+    );
+
+    expect(screen.getByText("Reservá tu turno")).toHaveStyle({
+      backgroundColor: "#6366f1",
+    });
+  });
 });
