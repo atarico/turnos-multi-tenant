@@ -220,9 +220,16 @@ const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
  * `<` allá), las listas pasan a ser una PARTICIÓN de los turnos vivos: cada uno
  * cae en exactamente una. El turno en curso encabeza la agenda, que es
  * exactamente donde el dueño lo busca.
+ *
+ * `at` es ese corte, y se RECIBE en vez de leerse acá adentro. Con dos lecturas
+ * de reloj independientes la partición no cierra: un turno que termina entre la
+ * lectura de esta consulta y la de `listBookingsToClose` cumple `ends_at >= t1`
+ * Y `ends_at < t2` a la vez, y sale duplicado en las dos listas. Quien pinta las
+ * dos lee el reloj una sola vez y pasa el mismo instante a ambas.
  */
 export async function listUpcomingBookings(
   tenantId: string,
+  at: Date = new Date(),
 ): Promise<Result<AgendaBooking[]>> {
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -230,7 +237,7 @@ export async function listUpcomingBookings(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
-    .gte("ends_at", new Date().toISOString())
+    .gte("ends_at", at.toISOString())
     .order("starts_at");
 
   if (error) {
@@ -248,14 +255,17 @@ export async function listUpcomingBookings(
  * Sin esta lista el ciclo de vida no cierra nunca.
  *
  * Es la mitad complementaria de `listUpcomingBookings`: mismo filtro de estados,
- * misma columna de corte, operador opuesto. Mover cualquiera de los dos cortes a
- * otra columna reabre un hueco por el que se caen turnos vivos.
+ * misma columna de corte, operador opuesto, y —cuando quien las llama pasa el
+ * mismo `at` a las dos— el mismo instante. Mover cualquiera de los dos cortes a
+ * otra columna reabre un hueco por el que se caen turnos vivos; dejar que cada
+ * una lea su propio reloj los duplica en la ventana entre ambas lecturas.
  *
  * Van del más reciente al más viejo: lo primero que el dueño quiere cerrar es
  * lo que acaba de pasar.
  */
 export async function listBookingsToClose(
   tenantId: string,
+  at: Date = new Date(),
 ): Promise<Result<AgendaBooking[]>> {
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -263,7 +273,7 @@ export async function listBookingsToClose(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
-    .lt("ends_at", new Date().toISOString())
+    .lt("ends_at", at.toISOString())
     .order("starts_at", { ascending: false });
 
   if (error) {

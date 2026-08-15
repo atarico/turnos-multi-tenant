@@ -369,6 +369,29 @@ describe("listBookingsToClose", () => {
     expect(filterArg("eq")).toBe("tenant-1");
   });
 
+  it("maps the returned rows onto the agenda shape", async () => {
+    fromData = [
+      {
+        id: "b1",
+        customer_name: "Ana",
+        customer_phone: null,
+        starts_at: "2026-09-01T10:00:00Z",
+        ends_at: "2026-09-01T10:30:00Z",
+        status: "confirmed",
+        service_name: "Corte",
+        staff_name: "Juan",
+      },
+    ];
+
+    const result = await listBookingsToClose("tenant-1");
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toHaveLength(1);
+    expect(result.ok && result.value[0]?.customerName).toBe("Ana");
+    expect(result.ok && result.value[0]?.serviceName).toBe("Corte");
+    expect(result.ok && result.value[0]?.endsAt).toBe("2026-09-01T10:30:00Z");
+  });
+
   it("surfaces a domain error instead of throwing when the query fails", async () => {
     fromError = { message: "boom" };
 
@@ -380,20 +403,42 @@ describe("listBookingsToClose", () => {
 
 /**
  * Las dos listas del panel son UNA agenda partida en dos, no dos consultas
- * sueltas. La invariante que las ata: cortan por la MISMA columna con
- * operadores complementarios (`>=` y `<`), así que todo turno vivo cae en
- * exactamente una. Si alguien vuelve a mover uno de los dos cortes a otra
- * columna, reabre el hueco por el que se caía el turno en curso.
+ * sueltas. Para que sea una partición de verdad hacen falta DOS cosas, y las dos
+ * se comprueban acá:
+ *
+ * 1. Que corten por la MISMA columna con operadores complementarios (`>=` y
+ *    `<`). Mover uno de los dos a otra columna reabre el hueco por el que se
+ *    caía el turno en curso.
+ * 2. Que corten en el MISMO instante. Con dos lecturas de reloj independientes
+ *    hay una ventana —chica, pero real— en la que un turno que termina entre
+ *    `t1` y `t2` cumple `ends_at >= t1` Y `ends_at < t2` a la vez, y sale
+ *    duplicado en las dos listas. Por eso el instante se recibe, no se lee.
  */
 describe("la agenda del panel y la lista de cierre parten los turnos vivos", () => {
-  it("splits on the same column, leaving no booking in between", async () => {
+  it("cuts both lists on the same column at the same instant", async () => {
+    const at = new Date("2026-09-01T12:00:00.000Z");
+
+    await listUpcomingBookings("tenant-1", at);
+    const upcoming = { column: filterColumn("gte"), instant: filterArg("gte") };
+
+    await listBookingsToClose("tenant-1", at);
+    const toClose = { column: filterColumn("lt"), instant: filterArg("lt") };
+
+    expect(upcoming.column).toBe(toClose.column);
+    expect(upcoming.instant).toBe(at.toISOString());
+    expect(toClose.instant).toBe(at.toISOString());
+  });
+
+  // El default tiene que seguir siendo "ahora": un llamador que no sabe nada de
+  // esto no puede quedarse sin corte.
+  it("falls back to the current instant when the caller passes none", async () => {
+    const before = new Date().toISOString();
     await listUpcomingBookings("tenant-1");
-    const upcomingColumn = filterColumn("gte");
+    const after = new Date().toISOString();
 
-    await listBookingsToClose("tenant-1");
-    const toCloseColumn = filterColumn("lt");
-
-    expect(upcomingColumn).toBe(toCloseColumn);
+    const used = filterArg("gte") as string;
+    expect(used >= before).toBe(true);
+    expect(used <= after).toBe(true);
   });
 });
 

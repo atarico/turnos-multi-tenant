@@ -65,10 +65,14 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
   if (!tenant) redirect("/panel/bienvenida");
 
+  // Un solo reloj para las dos listas: son una agenda partida en dos por este
+  // instante. Si cada consulta leyera el suyo, un turno que termina entre las
+  // dos lecturas cumpliría los dos filtros y se pintaría duplicado.
+  const now = new Date();
   const [bookingsResult, toCloseResult, todayCountResult, revenueResult] =
     await Promise.all([
-      listUpcomingBookings(tenant.id),
-      listBookingsToClose(tenant.id),
+      listUpcomingBookings(tenant.id, now),
+      listBookingsToClose(tenant.id, now),
       countBookingsOnDay(tenant.id, todayInTz(tenant.timezone), tenant.timezone),
       sumMonthlyRevenue(
         tenant.id,
