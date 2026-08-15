@@ -186,10 +186,37 @@ describe("PanelPage", () => {
     },
   );
 
+  // Las dos listas son una sola agenda partida en dos por el mismo instante. Si
+  // cada consulta leyera su propio reloj, un turno que termina entre las dos
+  // lecturas cumpliría los dos filtros y saldría duplicado en pantalla. La
+  // página lee el reloj UNA vez y les pasa el mismo `Date` a las dos: por eso
+  // acá se compara identidad de objeto y no igualdad de valor.
+  it(
+    "corta las dos listas con una única lectura del reloj",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { listBookingsToClose, listUpcomingBookings } = await import(
+        "@/modules/booking/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      const upcomingAt = vi.mocked(listUpcomingBookings).mock.calls[0]![1];
+      const toCloseAt = vi.mocked(listBookingsToClose).mock.calls[0]![1];
+      expect(upcomingAt).toBeInstanceOf(Date);
+      expect(upcomingAt).toBe(toCloseAt);
+    },
+  );
+
   // "Turnos hoy" sale de su propia consulta contra la base, NO de filtrar la
-  // lista de próximos turnos. Esa lista corta en `starts_at >= now()`: a las
-  // 23:00 los turnos de las 23:00 ya no están ahí y el contador marcaba 0
-  // mientras el día seguía teniendo dos turnos.
+  // lista de próximos turnos. Esa lista corta por `ends_at`: los turnos del día
+  // que ya terminaron no están ahí, y el contador marcaba 0 mientras el día
+  // seguía teniendo dos turnos.
   it(
     "cuenta los turnos del día aunque ya no queden próximos turnos",
     { timeout: 15000 },
