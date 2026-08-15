@@ -10,6 +10,7 @@ import {
   LogOut,
   Plus,
   Scissors,
+  Settings,
   Users,
   Wallet,
 } from "lucide-react";
@@ -135,6 +136,13 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
           >
             <Users className="size-4" />
             Profesionales
+          </Link>
+          <Link
+            href="/panel/configuracion"
+            className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
+          >
+            <Settings className="size-4" />
+            Configuración
           </Link>
           <Link
             href="/panel/nueva-reserva"
