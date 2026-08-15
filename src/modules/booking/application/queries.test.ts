@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countBookingsOnDay,
   getBooking,
+  listBookingsToClose,
   listUpcomingBookings,
   sumMonthlyRevenue,
 } from "./queries";
@@ -99,6 +100,14 @@ const lastSelectOptions = () =>
 /** El primer argumento con que se llamó a un filtro de la última consulta. */
 const filterArg = (method: "eq" | "in" | "gte" | "lt", index = 0) =>
   lastBuilder()[method].mock.calls[index]?.[1] as unknown;
+
+/**
+ * La COLUMNA sobre la que se aplicó un filtro de la última consulta. Separada de
+ * `filterArg` porque en las listas de la agenda lo que importa no es el instante
+ * (que es `now()` y cambia en cada corrida) sino sobre qué columna se corta.
+ */
+const filterColumn = (method: "eq" | "in" | "gte" | "lt", index = 0) =>
+  lastBuilder()[method].mock.calls[index]?.[0] as string | undefined;
 
 beforeEach(() => {
   rows = [];
@@ -331,6 +340,60 @@ describe("listUpcomingBookings", () => {
     expect(select).toContain("staff_name");
     expect(select).not.toContain("services(");
     expect(select).not.toContain("staff(");
+  });
+
+  // El turno que está pasando AHORA MISMO ya empezó, así que un corte en
+  // `starts_at >= now()` lo dejaba afuera — y `listBookingsToClose` tampoco lo
+  // levantaba, porque ésa arranca recién en `ends_at < now()`. El dueño estaba
+  // atendiendo a alguien que su propio panel decía que no existía.
+  //
+  // El corte va sobre `ends_at`: un turno pertenece a la agenda mientras no
+  // haya TERMINADO, no mientras no haya empezado.
+  it("keeps a booking that already started but has not ended yet", async () => {
+    await listUpcomingBookings("tenant-1");
+
+    expect(filterColumn("gte")).toBe("ends_at");
+  });
+});
+
+describe("listBookingsToClose", () => {
+  it("asks only for bookings that already ended", async () => {
+    await listBookingsToClose("tenant-1");
+
+    expect(filterColumn("lt")).toBe("ends_at");
+  });
+
+  it("scopes the query to the tenant", async () => {
+    await listBookingsToClose("tenant-1");
+
+    expect(filterArg("eq")).toBe("tenant-1");
+  });
+
+  it("surfaces a domain error instead of throwing when the query fails", async () => {
+    fromError = { message: "boom" };
+
+    const result = await listBookingsToClose("tenant-1");
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+/**
+ * Las dos listas del panel son UNA agenda partida en dos, no dos consultas
+ * sueltas. La invariante que las ata: cortan por la MISMA columna con
+ * operadores complementarios (`>=` y `<`), así que todo turno vivo cae en
+ * exactamente una. Si alguien vuelve a mover uno de los dos cortes a otra
+ * columna, reabre el hueco por el que se caía el turno en curso.
+ */
+describe("la agenda del panel y la lista de cierre parten los turnos vivos", () => {
+  it("splits on the same column, leaving no booking in between", async () => {
+    await listUpcomingBookings("tenant-1");
+    const upcomingColumn = filterColumn("gte");
+
+    await listBookingsToClose("tenant-1");
+    const toCloseColumn = filterColumn("lt");
+
+    expect(upcomingColumn).toBe(toCloseColumn);
   });
 });
 
