@@ -62,6 +62,16 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("Color de marca")).toHaveValue("#e3b23c");
   });
 
+  /**
+   * El link público no es decoración en esta pantalla: el color se elige acá
+   * pero se VE allá, así que sin el link el dueño no tiene forma de comprobar
+   * lo que acaba de guardar.
+   *
+   * Se verifica que apunte a ESTE negocio, no la URL completa: cómo se resuelve
+   * el origen (env var y su fallback) ya está cubierto en los tests del panel y
+   * de `public-url`. Repetirlo acá ataría este test a una decisión que no es
+   * suya y lo rompería cada vez que cambie el entorno.
+   */
   it("muestra el link público para que el dueño vaya a ver el resultado", async () => {
     const { getCurrentTenant } = await import(
       "@/modules/tenants/application/queries"
@@ -71,8 +81,9 @@ describe("SettingsPage", () => {
 
     render(await SettingsPage());
 
-    expect(
-      screen.getByRole("heading", { name: "Configuración" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /acme/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining(`/${tenant.slug}`),
+    );
   });
 });
