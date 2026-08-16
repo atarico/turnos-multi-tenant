@@ -4,24 +4,18 @@ import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { buttonClasses } from "@/components/ui/button";
-import { updateBrandingAction } from "@/modules/tenants/application/actions";
-import {
-  removeLogoAction,
-  uploadLogoAction,
-} from "@/modules/tenants/application/logo-actions";
 import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
-import { BrandingForm } from "@/modules/tenants/ui/branding-form";
-import { LogoForm } from "@/modules/tenants/ui/logo-form";
+import { saveSettingsAction } from "@/modules/tenants/application/settings-actions";
 import { PublicLinkField } from "@/modules/tenants/ui/public-link-field";
+import { SettingsForm } from "@/modules/tenants/ui/settings-form";
 
 export const metadata: Metadata = { title: "Configuración" };
 
 /**
- * Configuración del negocio. Hoy sólo el color de marca; nace como ruta propia
- * y no como sección del panel porque es el lugar natural para lo que venga
- * después (logo, datos del negocio, zona horaria) y mudarlo más tarde costaría
- * más que abrirlo ahora.
+ * Configuración del negocio. Hoy sólo lo visible —color y logo— pero nace como
+ * ruta propia porque es el lugar natural para lo que venga después (datos del
+ * negocio, zona horaria) y mudarlo más tarde costaría más que abrirlo ahora.
  */
 export default async function SettingsPage() {
   const tenant = await getCurrentTenant();
@@ -55,17 +49,10 @@ export default async function SettingsPage() {
         `toPublicTenant`. La UI habla camelCase; la traducción se hace acá.
       */}
       <section className="mt-8">
-        <BrandingForm
+        <SettingsForm
           brandColor={tenant.brand_color}
-          save={updateBrandingAction}
-        />
-      </section>
-
-      <section className="mt-10 border-t border-border pt-8">
-        <LogoForm
           logoUrl={tenant.logo_url}
-          upload={uploadLogoAction}
-          remove={removeLogoAction}
+          save={saveSettingsAction}
         />
       </section>
     </div>

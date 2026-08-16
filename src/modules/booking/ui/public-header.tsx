@@ -32,7 +32,7 @@ export function PublicHeader({ name, logoUrl, brandColor }: PublicHeaderProps) {
    * de la página. Los dos tienen que caer juntos para que el par cierre.
    *
    * Hoy es defensivo —la columna es NOT NULL con default y la única escritura
-   * pasa por `updateBrandingAction`— pero esta página la ven los clientes del
+   * pasa por `saveSettingsAction`— pero esta página la ven los clientes del
    * negocio y no cuesta nada sostener la invariante en el borde.
    */
   const background = normalizeBrandColor(brandColor) ?? DEFAULT_BRAND_COLOR;
