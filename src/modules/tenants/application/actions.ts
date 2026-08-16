@@ -7,8 +7,10 @@ import { z } from "zod";
 import { type ActionState, errorState } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
 
+import { normalizeBrandColor } from "../domain/brand";
 import { SUPPORTED_COUNTRIES } from "../domain/countries";
 import { generateTenantSlug } from "../domain/slug";
+import { getCurrentTenant } from "./queries";
 
 const createBusinessSchema = z.object({
   businessName: z
@@ -60,4 +62,68 @@ export async function createBusinessAction(
   // `?bienvenida=1` que traían el alta y el login, y sin reponerlo acá el modal
   // recién aparecería al segundo login.
   redirect("/panel?bienvenida=1");
+}
+
+/**
+ * Guarda el color de marca del negocio.
+ *
+ * Valida ANTES de escribir, no al pintar: el color termina inyectado como valor
+ * de una custom property CSS en la página pública, así que lo que no pasa la
+ * lista blanca del dominio no llega nunca a la base. Ver `domain/brand.ts`.
+ *
+ * No hace falta filtrar por dueño a mano — la política `tenants_update_members`
+ * ya limita el UPDATE a los negocios del usuario. El `.eq("id", ...)` está para
+ * acotar la fila, no para autorizar.
+ *
+ * A diferencia del onboarding, acá NO se redirige: el dueño se queda en su
+ * configuración viendo el resultado. Por eso devuelve un estado de éxito de
+ * verdad, y no uno inalcanzable detrás de un `redirect()`.
+ */
+export async function updateBrandingAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const brandColor = normalizeBrandColor(String(formData.get("brandColor") ?? ""));
+
+  if (!brandColor) {
+    return errorState("Revisá los datos del formulario.", {
+      brandColor: "Elegí un color válido.",
+    });
+  }
+
+  const tenant = await getCurrentTenant();
+  if (!tenant) {
+    return errorState("No encontramos tu negocio.");
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("tenants")
+    .update({ brand_color: brandColor })
+    .eq("id", tenant.id)
+    .select("id");
+
+  if (error) {
+    return errorState("No pudimos guardar el color. Intentá de nuevo.");
+  }
+
+  /**
+   * `error: null` NO alcanza para afirmar que se escribió.
+   *
+   * Cuando RLS recorta un UPDATE a cero filas, PostgREST no lo trata como
+   * error: devuelve éxito con un conjunto vacío. Sin el `.select("id")` de
+   * arriba no habría con qué distinguirlo, y la pantalla diría "guardado" sobre
+   * una escritura que no ocurrió. Una configuración que miente sobre lo que
+   * persistió es peor que una que falla de frente.
+   */
+  if (!data || data.length === 0) {
+    return errorState("No pudimos guardar el color. Intentá de nuevo.");
+  }
+
+  revalidatePath("/panel/configuracion");
+  // La página pública es el ÚNICO lugar donde el color se ve. Sin esta línea el
+  // dueño guarda, ve el cambio en el panel, abre su link y sigue con el viejo.
+  revalidatePath(`/${tenant.slug}`);
+
+  return { status: "success", message: "Listo, guardamos tu color." };
 }
