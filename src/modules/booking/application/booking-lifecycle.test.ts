@@ -21,10 +21,19 @@ vi.mock("next/cache", () => ({
   revalidatePath: (path: string) => revalidatePath(path),
 }));
 
-/** Builder encadenable `.update().eq().eq()` que resuelve a { error }. */
+/**
+ * Builder encadenable `.update().eq().eq().select()`.
+ *
+ * El `.select()` no es adorno: sin él PostgREST responde 204 sin cuerpo y no
+ * hay forma de saber cuántas filas tocó. Por eso el doble modela las FILAS
+ * devueltas además del error — un UPDATE recortado a cero filas vuelve con
+ * `error: null` y hay que poder distinguirlo.
+ */
 let updateError: { message: string } | null = null;
+let updatedRows: Array<{ id: string }> = [{ id: "b1" }];
 const updateEq = vi.fn();
 const update = vi.fn();
+const select = vi.fn();
 
 function buildQuery() {
   const builder: Record<string, unknown> = {};
@@ -32,8 +41,12 @@ function buildQuery() {
     updateEq(...args);
     return builder;
   };
-  builder.then = (resolve: (r: { error: unknown }) => unknown) =>
-    Promise.resolve(resolve({ error: updateError }));
+  builder.select = (...args: unknown[]) => {
+    select(...args);
+    return builder;
+  };
+  builder.then = (resolve: (r: { data: unknown; error: unknown }) => unknown) =>
+    Promise.resolve(resolve({ data: updatedRows, error: updateError }));
   return builder;
 }
 
@@ -107,6 +120,7 @@ function rescheduleForm(fields: Record<string, string>): FormData {
 beforeEach(() => {
   vi.clearAllMocks();
   updateError = null;
+  updatedRows = [{ id: "b1" }];
   rpc.mockResolvedValue({ error: null });
   getBooking.mockResolvedValue(ok(booking));
   getCurrentTenant.mockResolvedValue({ id: "tenant-1", slug: "negocio" });
@@ -217,6 +231,30 @@ describe("updateBookingStatusAction", () => {
 
     expect(result.status).toBe("error");
     expect(update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El fallo silencioso: PostgREST devuelve `error: null` con conjunto vacío
+   * cuando RLS recorta el UPDATE a cero filas, o cuando el turno se borró entre
+   * la lectura de unas líneas antes y esta escritura. Sin contar las filas, la
+   * pantalla anunciaba "turno completado" sobre una fila que ya no existe.
+   */
+  it("no dice que cambió el estado si no se tocó ninguna fila", async () => {
+    updatedRows = [];
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("completed"),
+    );
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("pide la fila de vuelta para poder contar lo que escribió", async () => {
+    await updateBookingStatusAction(idleState, statusForm("completed"));
+
+    expect(select).toHaveBeenCalled();
   });
 
   it("si el UPDATE falla devuelve error y NO revalida nada", async () => {

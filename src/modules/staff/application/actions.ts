@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
+import { wroteRows } from "@/core/db-write";
 import { createClient } from "@/lib/supabase/server";
 import { deleteBlockMessage } from "@/modules/booking/domain/delete-outcome";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
@@ -120,12 +121,15 @@ export async function saveStaffAction(
   let staffId = id;
 
   if (id) {
-    const { error } = await supabase
+    // Pide la fila de vuelta y cuenta lo que tocó: `error: null` con cero filas
+    // es un fallo silencioso, no un guardado. Ver `core/db-write.ts`.
+    const written = await supabase
       .from("staff")
       .update({ name, role })
       .eq("id", id)
-      .eq("tenant_id", tenant.id);
-    if (error) {
+      .eq("tenant_id", tenant.id)
+      .select("id");
+    if (!wroteRows(written)) {
       return errorState("No pudimos guardar los cambios. Intentá de nuevo.");
     }
   } else {
@@ -173,13 +177,15 @@ export async function toggleStaffActiveAction(
   const active = String(formData.get("active") ?? "") === "true";
 
   const supabase = await createClient();
-  const { error } = await supabase
+  // Cero filas afectadas no es éxito: ver `core/db-write.ts`.
+  const written = await supabase
     .from("staff")
     .update({ active })
     .eq("id", id)
-    .eq("tenant_id", tenant.id);
+    .eq("tenant_id", tenant.id)
+    .select("id");
 
-  if (error) {
+  if (!wroteRows(written)) {
     return errorState("No pudimos cambiar el estado del profesional.");
   }
 

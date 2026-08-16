@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { type ActionState, errorState } from "@/core/action";
+import { wroteRows } from "@/core/db-write";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
@@ -87,13 +88,22 @@ export async function updateBookingStatusAction(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase
+  /**
+   * Pide la fila de vuelta y cuenta lo que tocó. Acá la exposición es menor que
+   * en otras acciones —el turno se releyó de la base unas líneas más arriba, así
+   * que existía y era de este negocio— pero entre esa lectura y esta escritura
+   * hay una ventana: si el turno se borra en el medio, sin este chequeo la
+   * pantalla anunciaría "turno completado" sobre una fila que ya no está.
+   * Ver `core/db-write.ts`.
+   */
+  const written = await supabase
     .from("bookings")
     .update({ status: nextStatus })
     .eq("id", id)
-    .eq("tenant_id", tenant.id);
+    .eq("tenant_id", tenant.id)
+    .select("id");
 
-  if (error) {
+  if (!wroteRows(written)) {
     return errorState("No pudimos cambiar el estado del turno. Intentá de nuevo.");
   }
 
