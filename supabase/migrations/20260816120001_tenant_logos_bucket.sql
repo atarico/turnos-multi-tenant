@@ -103,9 +103,19 @@ create policy "tenant_logos_delete_members"
 -- `/storage/v1/object/public/...` se sirve sin RLS, que es exactamente lo que
 -- necesita la página anónima.
 --
--- Esta política es para la API de objetos: el dueño autenticado tiene que poder
--- LISTAR lo que hay en su carpeta para reemplazarlo o borrarlo. Sin ella, el
--- borrado del logo anterior no encuentra nada que borrar.
+-- Esta política cubre la API de objetos para el dueño autenticado: inspeccionar
+-- o listar su propia carpeta. La app HOY no lista nada —`removePreviousLogo`
+-- borra por ruta exacta, sacada de la URL guardada— así que la política no es
+-- necesaria para ningún camino que el código recorra.
+--
+-- Se deja igual, y a propósito: sin ella el dueño no puede ni mirar su propia
+-- carpeta desde el dashboard de Supabase o desde cualquier herramienta, mientras
+-- que un anónimo sí puede leer el archivo por la URL pública. Esa asimetría
+-- —el dueño con menos acceso que un desconocido— es más difícil de explicar que
+-- una política que hoy no se ejerce.
+--
+-- OJO si alguien la borra "por no usarse": el día que la app vuelva a listar,
+-- el borrado no va a fallar con un error, simplemente no va a encontrar nada.
 -- ------------------------------------------------------------
 drop policy if exists "tenant_logos_select_members" on storage.objects;
 create policy "tenant_logos_select_members"

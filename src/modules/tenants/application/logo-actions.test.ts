@@ -196,6 +196,73 @@ describe("uploadLogoAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  /**
+   * Cuando la fila no se actualiza, el archivo YA está en el bucket. Sin
+   * deshacer esa subida queda un objeto que nadie apunta y que nadie va a
+   * juntar nunca — y se acumula uno por cada reintento fallido.
+   *
+   * Esto lo perdí yo al sacar el barrido de carpeta: aquel, con todos sus
+   * problemas de concurrencia, al menos limpiaba los huérfanos. Reemplazarlo
+   * por un borrado puntual dejó la fuga sin tapar hasta que el review la marcó.
+   */
+  it("deshace la subida cuando la fila no se pudo actualizar", async () => {
+    updatedRows = [];
+
+    await uploadLogoAction(idleState, logoForm());
+
+    const subido = upload.mock.calls[0]![0];
+    expect(remove).toHaveBeenCalledWith([subido]);
+  });
+
+  it("deshace la subida cuando el guardado devuelve error", async () => {
+    updateError = { message: "boom" };
+
+    await uploadLogoAction(idleState, logoForm());
+
+    const subido = upload.mock.calls[0]![0];
+    expect(remove).toHaveBeenCalledWith([subido]);
+  });
+
+  // El logo anterior NO se toca si el guardado falló: la fila lo sigue
+  // apuntando, así que borrarlo dejaría al negocio sin logo por un error que
+  // no tuvo nada que ver con él.
+  it("no toca el logo anterior si el guardado falló", async () => {
+    updatedRows = [];
+    getCurrentTenant.mockResolvedValue({
+      ...tenantStub,
+      logo_url:
+        "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png",
+    });
+
+    await uploadLogoAction(idleState, logoForm());
+
+    const borrados = remove.mock.calls.flatMap((call) => call[0]);
+    expect(borrados).not.toContain("tenant-1/viejo.png");
+  });
+
+  /**
+   * La combinación que el review marcó como no cubierta: una subida y un
+   * borrado del mismo negocio corriendo a la vez. Ninguno puede dejar la
+   * columna apuntando a un archivo que el otro borró.
+   */
+  it("una subida y un borrado simultáneos no se dejan una referencia colgada", async () => {
+    const previo =
+      "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png";
+    getCurrentTenant.mockResolvedValue({ ...tenantStub, logo_url: previo });
+
+    await Promise.all([
+      uploadLogoAction(idleState, logoForm()),
+      removeLogoAction(),
+    ]);
+
+    const subido = upload.mock.calls[0]![0];
+    const borrados = remove.mock.calls.flatMap((call) => call[0]);
+
+    // Los dos apuntan al MISMO archivo viejo. El recién subido no se toca.
+    expect(borrados.every((p) => p === "tenant-1/viejo.png")).toBe(true);
+    expect(borrados).not.toContain(subido);
+  });
+
   it("borra el logo anterior, identificado por su URL", async () => {
     getCurrentTenant.mockResolvedValue({
       ...tenantStub,

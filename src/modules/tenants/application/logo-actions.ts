@@ -100,8 +100,17 @@ export async function uploadLogoAction(
    * filas vuelve como éxito con conjunto vacío. Acá duele más que en el color,
    * porque el archivo YA está en el bucket: decir "listo" dejaría un logo
    * subido que la fila no apunta.
+   *
+   * Y hay que DESHACER la subida, no sólo avisar del error. El archivo ya
+   * existe: sin borrarlo queda un objeto que nadie apunta y que nadie va a
+   * juntar nunca, y se acumula uno por cada reintento fallido.
+   *
+   * Se borra el recién subido y NO el anterior: la fila sigue apuntando al
+   * viejo, así que llevárselo dejaría al negocio sin logo por un error que no
+   * tuvo nada que ver con él.
    */
   if (error || !data || data.length === 0) {
+    await supabase.storage.from(BUCKET).remove([path]);
     return errorState("No pudimos guardar el logo. Intentá de nuevo.");
   }
 
