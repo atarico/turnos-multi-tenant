@@ -13,13 +13,8 @@ vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: vi.fn(),
 }));
 
-vi.mock("@/modules/tenants/application/actions", () => ({
-  updateBrandingAction: vi.fn(),
-}));
-
-vi.mock("@/modules/tenants/application/logo-actions", () => ({
-  uploadLogoAction: vi.fn(),
-  removeLogoAction: vi.fn(),
+vi.mock("@/modules/tenants/application/settings-actions", () => ({
+  saveSettingsAction: vi.fn(),
 }));
 
 const tenant: Tenant = {
@@ -113,7 +108,7 @@ describe("SettingsPage", () => {
 
     render(await SettingsPage());
 
-    expect(screen.getByLabelText(/logo/i)).toHaveAttribute("type", "file");
+    expect(screen.getByLabelText(/^logo$/i)).toHaveAttribute("type", "file");
     expect(screen.getByRole("img", { name: /logo/i })).toHaveAttribute(
       "src",
       "https://cdn.test/storage/t1/logo.png",
