@@ -53,7 +53,21 @@ interface QueryChain extends PromiseLike<QueryResult> {
 }
 
 const NEW_STAFF_ID = "staff-nuevo";
+
+/**
+ * Dos formas de resultado, porque la base devuelve dos cosas distintas.
+ *
+ * `.single()` —el alta— devuelve UNA fila como objeto. Un `.select()` sobre un
+ * UPDATE devuelve la LISTA de filas afectadas, y esa lista es lo único que
+ * distingue un guardado real de uno que RLS recortó a cero sin dar error.
+ * Mezclarlas en un solo doble haría que el guard de filas afectadas nunca
+ * pudiera probarse.
+ */
 let queryResult: QueryResult = { data: { id: NEW_STAFF_ID }, error: null };
+let rowsResult: { data: Array<{ id: string }> | null; error: unknown } = {
+  data: [{ id: "staff-1" }],
+  error: null,
+};
 
 const chain: QueryChain = {
   insert: () => chain,
@@ -64,7 +78,7 @@ const chain: QueryChain = {
   not: () => chain,
   single: async () => queryResult,
   then: (onfulfilled, onrejected) =>
-    Promise.resolve(queryResult).then(onfulfilled, onrejected),
+    Promise.resolve(rowsResult as QueryResult).then(onfulfilled, onrejected),
 };
 
 const from = vi.fn(() => chain);
@@ -106,6 +120,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   rpc.mockResolvedValue({ data: "deleted", error: null });
   queryResult = { data: { id: NEW_STAFF_ID }, error: null };
+  rowsResult = { data: [{ id: "staff-1" }], error: null };
 });
 
 /** Arma el FormData tal como lo manda el formulario de profesionales. */
@@ -145,6 +160,21 @@ describe("saveStaffAction", () => {
 
     expect(result.status).toBe("error");
     expect(redirect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El fallo silencioso: PostgREST devuelve `error: null` con cero filas cuando
+   * RLS recorta el UPDATE, o cuando el `id` ya no existe. Sin contar las filas,
+   * editar un profesional borrado en otra pestaña respondía "guardado" sobre
+   * una fila que no está.
+   */
+  it("no dice que guardó la edición si no se tocó ninguna fila", async () => {
+    rowsResult = { data: [], error: null };
+
+    const result = await saveStaffAction(idleState, staffForm("staff-1"));
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 
