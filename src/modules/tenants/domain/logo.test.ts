@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALLOWED_LOGO_TYPES,
+  LOGO_BUCKET,
   MAX_LOGO_BYTES,
   logoExtensionFor,
+  logoStoragePath,
   rejectLogo,
   sniffImageType,
 } from "./logo";
@@ -118,6 +120,56 @@ describe("rejectLogo", () => {
     expect(rejectLogo({ type: "image/jpeg", size: 10, head: bytes(JPEG) })).toBeNull();
     expect(rejectLogo({ type: "image/webp", size: 10, head: bytes(WEBP) })).toBeNull();
   });
+});
+
+/**
+ * Para reemplazar un logo hay que borrar el ANTERIOR, y lo único que se guarda
+ * de él es su URL pública. Volver de la URL a la ruta del objeto es lo que
+ * permite borrar exactamente ese archivo — en vez de barrer la carpeta, que es
+ * lo que rompía con dos subidas simultáneas.
+ */
+describe("logoStoragePath", () => {
+  const url = (path: string) =>
+    `https://abc123.supabase.co/storage/v1/object/public/${LOGO_BUCKET}/${path}`;
+
+  it("saca la ruta del objeto de su URL pública", () => {
+    expect(logoStoragePath(url("t1/abcd.png"), "t1")).toBe("t1/abcd.png");
+  });
+
+  it("devuelve null si no hay logo guardado", () => {
+    expect(logoStoragePath(null, "t1")).toBeNull();
+  });
+
+  /**
+   * El chequeo que importa: la URL viene de una columna, y una columna se puede
+   * escribir. Si apuntara a la carpeta de OTRO negocio, esto devolvería esa
+   * ruta y el borrado intentaría llevarse un archivo ajeno. La política de
+   * Storage lo frenaría igual, pero el pedido no debería salir nunca.
+   */
+  it("devuelve null si la ruta es de otro negocio", () => {
+    expect(logoStoragePath(url("otro-tenant/abcd.png"), "t1")).toBeNull();
+  });
+
+  it("devuelve null si la URL no es de este bucket", () => {
+    expect(
+      logoStoragePath(
+        "https://abc123.supabase.co/storage/v1/object/public/otra-cosa/t1/x.png",
+        "t1",
+      ),
+    ).toBeNull();
+  });
+
+  // Un prefijo que sólo COMPARTE el comienzo del id no es el mismo negocio.
+  it("no confunde un id que empieza igual", () => {
+    expect(logoStoragePath(url("t10/abcd.png"), "t1")).toBeNull();
+  });
+
+  it.each(["", "no-es-una-url", "https://otro.host/x.png"])(
+    "devuelve null ante %s",
+    (raw) => {
+      expect(logoStoragePath(raw, "t1")).toBeNull();
+    },
+  );
 });
 
 describe("logoExtensionFor", () => {

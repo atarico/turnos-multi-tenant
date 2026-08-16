@@ -26,6 +26,9 @@ export type AllowedLogoType = (typeof ALLOWED_LOGO_TYPES)[number];
 /** 2 MB. Un logo que no entra en 2 MB no es un logo, es una foto. */
 export const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
+/** Bucket declarado en `20260816120001_tenant_logos_bucket.sql`. */
+export const LOGO_BUCKET = "tenant-logos";
+
 /** Por qué se rechazó, para que la acción elija el mensaje. */
 export type LogoRejection = "empty" | "size" | "type" | "content";
 
@@ -38,6 +41,37 @@ const EXTENSIONS: Record<AllowedLogoType, string> = {
 /** Extensión con la que se guarda cada tipo permitido. */
 export function logoExtensionFor(type: string): string | null {
   return EXTENSIONS[type as AllowedLogoType] ?? null;
+}
+
+/**
+ * Ruta del objeto dentro del bucket a partir de su URL pública, o `null` si esa
+ * URL no describe un logo de ESTE negocio.
+ *
+ * Existe para poder borrar el logo anterior por su nombre exacto. La
+ * alternativa —listar la carpeta y borrar todo menos el archivo nuevo— se
+ * rompía con dos subidas simultáneas: la que terminaba última se llevaba el
+ * archivo que la columna estaba apuntando, y el negocio quedaba con una imagen
+ * rota en la página que ven sus clientes.
+ *
+ * El chequeo del prefijo NO es paranoia decorativa. La URL sale de una columna,
+ * y una columna se escribe: si apuntara a la carpeta de otro negocio, esto
+ * devolvería esa ruta y el borrado saldría a buscar un archivo ajeno. La
+ * política de Storage lo frenaría, pero un pedido que no debería existir es
+ * mejor no emitirlo. El prefijo se compara CON la barra (`${tenantId}/`) para
+ * que un id que apenas empieza igual —`t10` contra `t1`— no matchee.
+ */
+export function logoStoragePath(
+  publicUrl: string | null,
+  tenantId: string,
+): string | null {
+  if (!publicUrl) return null;
+
+  const marker = `/${LOGO_BUCKET}/`;
+  const at = publicUrl.indexOf(marker);
+  if (at === -1) return null;
+
+  const path = publicUrl.slice(at + marker.length);
+  return path.startsWith(`${tenantId}/`) ? path : null;
 }
 
 const startsWith = (bytes: Uint8Array, signature: number[], offset = 0): boolean =>

@@ -5,11 +5,17 @@ import { revalidatePath } from "next/cache";
 import { type ActionState, errorState } from "@/core/action";
 import { createClient } from "@/lib/supabase/server";
 
-import { logoExtensionFor, rejectLogo, type LogoRejection } from "../domain/logo";
+import {
+  LOGO_BUCKET,
+  logoExtensionFor,
+  logoStoragePath,
+  rejectLogo,
+  type LogoRejection,
+} from "../domain/logo";
 import { getCurrentTenant } from "./queries";
 
-/** Bucket declarado en `20260816120001_tenant_logos_bucket.sql`. */
-const BUCKET = "tenant-logos";
+/** El nombre del bucket vive en el dominio: lo usan la acción y `logoStoragePath`. */
+const BUCKET = LOGO_BUCKET;
 
 /**
  * Con 12 bytes alcanzan las tres firmas que reconocemos — la más larga es WEBP,
@@ -49,6 +55,12 @@ export async function uploadLogoAction(
 
   const tenant = await getCurrentTenant();
   if (!tenant) return errorState("No encontramos tu negocio.");
+
+  /**
+   * El logo que había ANTES, leído antes de pisarlo. Es lo único que después
+   * permite borrar exactamente ese archivo y no el que subió otra pestaña.
+   */
+  const previousUrl = tenant.logo_url;
 
   const extension = logoExtensionFor(file.type);
   /**
@@ -93,7 +105,7 @@ export async function uploadLogoAction(
     return errorState("No pudimos guardar el logo. Intentá de nuevo.");
   }
 
-  await removeOtherLogos(supabase, tenant.id, fileName);
+  await removePreviousLogo(supabase, previousUrl, tenant.id);
 
   revalidatePath("/panel/configuracion");
   revalidatePath(`/${tenant.slug}`);
@@ -124,7 +136,7 @@ export async function removeLogoAction(): Promise<ActionState> {
     return errorState("No pudimos sacar el logo. Intentá de nuevo.");
   }
 
-  await removeOtherLogos(supabase, tenant.id, null);
+  await removePreviousLogo(supabase, tenant.logo_url, tenant.id);
 
   revalidatePath("/panel/configuracion");
   revalidatePath(`/${tenant.slug}`);
@@ -133,30 +145,33 @@ export async function removeLogoAction(): Promise<ActionState> {
 }
 
 /**
- * Borra todo lo que haya en la carpeta del negocio salvo `keep`.
+ * Borra el logo ANTERIOR, identificado por su propia URL.
  *
- * Se hace DESPUÉS de que la fila quedó apuntando al archivo nuevo, y no antes:
- * si se borrara primero y después fallara el UPDATE, el negocio se quedaría sin
- * logo y con una columna apuntando a un archivo que ya no existe.
+ * La versión previa listaba la carpeta y borraba todo menos el archivo recién
+ * subido. Eso se rompe con dos subidas simultáneas —doble click, dos pestañas,
+ * dos personas—: la que termina última se lleva el archivo que la columna está
+ * apuntando, y el negocio queda con una imagen rota en la página que ven sus
+ * clientes. El review lo encontró; el barrido era el error de raíz.
  *
- * Barre la carpeta entera en vez de borrar sólo el anterior porque también
- * limpia los huérfanos que haya dejado un intento fallido. Y su resultado no se
- * mira: el logo nuevo ya está guardado y andando, así que un borrado que falla
- * deja basura, no un usuario roto. Fallar acá sería peor que no fallar.
+ * Borrando el anterior POR NOMBRE, dos subidas concurrentes intentan borrar el
+ * mismo archivo viejo: una lo logra, la otra no encuentra nada, y ninguna toca
+ * el archivo de la otra. Lo peor que puede pasar es que quede un huérfano
+ * invisible, que es infinitamente mejor que un logo roto a la vista.
+ *
+ * Se hace DESPUÉS de que la fila apunta al archivo nuevo: si se borrara primero
+ * y fallara el UPDATE, el negocio se quedaría sin logo Y con una columna
+ * apuntando a un archivo inexistente.
+ *
+ * Su resultado no se mira a propósito. Para cuando corre, el logo nuevo ya está
+ * guardado y andando: un borrado que falla deja basura, no un usuario roto.
  */
-async function removeOtherLogos(
+async function removePreviousLogo(
   supabase: Awaited<ReturnType<typeof createClient>>,
+  previousUrl: string | null,
   tenantId: string,
-  keep: string | null,
 ): Promise<void> {
-  const { data: existing } = await supabase.storage.from(BUCKET).list(tenantId);
-  if (!existing) return;
+  const stale = logoStoragePath(previousUrl, tenantId);
+  if (!stale) return;
 
-  const stale = existing
-    .filter((entry) => entry.name !== keep)
-    .map((entry) => `${tenantId}/${entry.name}`);
-
-  if (stale.length > 0) {
-    await supabase.storage.from(BUCKET).remove(stale);
-  }
+  await supabase.storage.from(BUCKET).remove([stale]);
 }

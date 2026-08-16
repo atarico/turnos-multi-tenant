@@ -44,8 +44,6 @@ const from = vi.fn<(table: string) => { update: typeof update }>(() => ({
 
 // --- doble de Storage -------------------------------------------------------
 let uploadError: { message: string } | null = null;
-let listed: Array<{ name: string }> = [];
-
 const upload = vi.fn<
   (
     path: string,
@@ -58,10 +56,6 @@ const getPublicUrl = vi.fn((path: string) => ({
   data: { publicUrl: `https://cdn.test/storage/${path}` },
 }));
 
-const list = vi.fn<
-  (folder: string) => Promise<{ data: Array<{ name: string }>; error: null }>
->(async () => ({ data: listed, error: null }));
-
 const remove = vi.fn<(paths: string[]) => Promise<{ error: null }>>(async () => ({
   error: null,
 }));
@@ -70,16 +64,19 @@ const storageFrom = vi.fn<
   (bucket: string) => {
     upload: typeof upload;
     getPublicUrl: typeof getPublicUrl;
-    list: typeof list;
     remove: typeof remove;
   }
->(() => ({ upload, getPublicUrl, list, remove }));
+>(() => ({ upload, getPublicUrl, remove }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ from, storage: { from: storageFrom } }),
 }));
 
-const tenantStub = { id: "tenant-1", slug: "peluqueria-acme" };
+const tenantStub = {
+  id: "tenant-1",
+  slug: "peluqueria-acme",
+  logo_url: null as string | null,
+};
 const getCurrentTenant = vi.fn(async () => tenantStub as unknown);
 vi.mock("./queries", () => ({
   getCurrentTenant: () => getCurrentTenant(),
@@ -105,7 +102,6 @@ beforeEach(() => {
   updateError = null;
   updatedRows = [{ id: "tenant-1" }];
   uploadError = null;
-  listed = [];
   getCurrentTenant.mockResolvedValue(tenantStub);
 });
 
@@ -200,16 +196,53 @@ describe("uploadLogoAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("borra los logos anteriores y deja sólo el nuevo", async () => {
-    listed = [{ name: "viejo-1.png" }, { name: "viejo-2.webp" }];
+  it("borra el logo anterior, identificado por su URL", async () => {
+    getCurrentTenant.mockResolvedValue({
+      ...tenantStub,
+      logo_url: `https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png`,
+    });
 
     await uploadLogoAction(idleState, logoForm());
 
-    const nuevo = upload.mock.calls[0]![0].split("/")[1];
-    const borrados = remove.mock.calls[0]![0];
-    expect(borrados).toContain("tenant-1/viejo-1.png");
-    expect(borrados).toContain("tenant-1/viejo-2.webp");
-    expect(borrados.some((p) => p.endsWith(nuevo!))).toBe(false);
+    expect(remove).toHaveBeenCalledWith(["tenant-1/viejo.png"]);
+  });
+
+  it("no intenta borrar nada cuando no había logo previo", async () => {
+    await uploadLogoAction(idleState, logoForm());
+
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El bug que encontró el review, pinchado como test.
+   *
+   * Antes esto listaba la carpeta y borraba "todo menos lo mío". Con dos
+   * subidas simultáneas del mismo negocio, la que terminaba última se llevaba
+   * el archivo que la columna estaba apuntando y la página pública quedaba con
+   * una imagen rota.
+   *
+   * Ahora cada subida borra sólo el archivo que ELLA reemplazó. Se simula la
+   * carrera corriendo dos subidas que leyeron el mismo logo previo: ninguna de
+   * las dos puede tocar el archivo de la otra.
+   */
+  it("con dos subidas simultáneas, ninguna borra el archivo de la otra", async () => {
+    const previo =
+      "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png";
+    getCurrentTenant.mockResolvedValue({ ...tenantStub, logo_url: previo });
+
+    await Promise.all([
+      uploadLogoAction(idleState, logoForm()),
+      uploadLogoAction(idleState, logoForm()),
+    ]);
+
+    const subidos = upload.mock.calls.map((call) => call[0]);
+    const borrados = remove.mock.calls.flatMap((call) => call[0]);
+
+    // Las dos borran el mismo archivo viejo, y sólo ese.
+    expect(borrados).toEqual(["tenant-1/viejo.png", "tenant-1/viejo.png"]);
+    for (const subido of subidos) {
+      expect(borrados).not.toContain(subido);
+    }
   });
 
   it("falla sin tocar nada cuando el usuario no tiene negocio", async () => {
@@ -223,8 +256,12 @@ describe("uploadLogoAction", () => {
 });
 
 describe("removeLogoAction", () => {
-  it("vacía la columna y borra los archivos del negocio", async () => {
-    listed = [{ name: "actual.png" }];
+  it("vacía la columna y borra el archivo que estaba guardado", async () => {
+    getCurrentTenant.mockResolvedValue({
+      ...tenantStub,
+      logo_url:
+        "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/actual.png",
+    });
 
     const result = await removeLogoAction();
 
