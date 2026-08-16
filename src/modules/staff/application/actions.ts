@@ -6,13 +6,14 @@ import { redirect } from "next/navigation";
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
 import { wroteRows } from "@/core/db-write";
 import { createClient } from "@/lib/supabase/server";
+import { hasRoomForStaff, limitsFor } from "@/modules/billing/domain/plan";
 import { deleteBlockMessage } from "@/modules/booking/domain/delete-outcome";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
 import { buildWeeklySchedule } from "../domain/schedule";
 import { staffFormSchema } from "../domain/schemas";
-import { getStaffMember } from "./queries";
+import { countActiveStaff, getStaffMember } from "./queries";
 
 /**
  * Server Actions de profesionales.
@@ -110,6 +111,27 @@ export async function saveStaffAction(
   const tenant = await getCurrentTenant();
   if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
 
+  const id = String(formData.get("id") ?? "").trim();
+
+  /**
+   * El cupo del plan se chequea SÓLO en el alta, y antes de tocar la base.
+   *
+   * En la edición no va, y no es un olvido: un negocio que bajó de plan queda
+   * por encima del cupo, y si el guard también corriera acá no podría ni
+   * corregirle el nombre a alguien que ya tiene cargado. Lo que se ocupa se
+   * congela; no se borra ni se bloquea. Ver `billing/domain/plan.ts`.
+   */
+  if (!id) {
+    const active = await countActiveStaff(tenant.id);
+    if (!active.ok) return errorState(active.error.message);
+
+    if (!hasRoomForStaff(tenant.plan, active.value)) {
+      return errorState(
+        `Tu plan permite hasta ${limitsFor(tenant.plan).staff} profesionales activos. Pausá uno que no estés usando, o pasá a un plan más grande para sumar otro.`,
+      );
+    }
+  }
+
   const supabase = await createClient();
   const { name, role, serviceIds } = parsed.data;
 
@@ -117,7 +139,6 @@ export async function saveStaffAction(
     return errorState("Alguno de los servicios elegidos no es de tu negocio.");
   }
 
-  const id = String(formData.get("id") ?? "").trim();
   let staffId = id;
 
   if (id) {
@@ -175,6 +196,26 @@ export async function toggleStaffActiveAction(
   if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
 
   const active = String(formData.get("active") ?? "") === "true";
+
+  /**
+   * Reactivar también gasta cupo, y sin este chequeo el límite se saltea solo:
+   * pausar a uno, crear otro con el lugar liberado, y reactivar al pausado deja
+   * al negocio por encima del tope. Pausar, en cambio, nunca se bloquea — es la
+   * salida del que quedó por encima, trabarla lo dejaría encerrado.
+   *
+   * El conteo excluye a este profesional: se pregunta si entra ÉL, así que
+   * contarlo a sí mismo haría fallar una reactivación que no cambia nada.
+   */
+  if (active) {
+    const others = await countActiveStaff(tenant.id, id);
+    if (!others.ok) return errorState(others.error.message);
+
+    if (!hasRoomForStaff(tenant.plan, others.value)) {
+      return errorState(
+        `Tu plan permite hasta ${limitsFor(tenant.plan).staff} profesionales activos. Pausá a otro antes de reactivar a este, o pasá a un plan más grande.`,
+      );
+    }
+  }
 
   const supabase = await createClient();
   // Cero filas afectadas no es éxito: ver `core/db-write.ts`.
