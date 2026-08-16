@@ -32,12 +32,23 @@ const select = vi.fn<
   }>
 >(async () => ({ data: updatedRows, error: updateError }));
 
-const eq = vi.fn<(column: string, value: string) => { select: typeof select }>(
-  () => ({ select }),
+/**
+ * El UPDATE encadena DOS condiciones: el id del negocio, y —para el
+ * compare-and-swap— el logo que la acción leyó. Por eso `eq` se devuelve a sí
+ * mismo, y `is` existe: sin logo previo la condición es IS NULL, porque en SQL
+ * nada es igual a null.
+ */
+interface Filters {
+  eq: typeof eq;
+  is: typeof is;
+  select: typeof select;
+}
+const eq = vi.fn<(column: string, value: string | null) => Filters>(
+  () => filters,
 );
-const update = vi.fn<(values: Record<string, unknown>) => { eq: typeof eq }>(
-  () => ({ eq }),
-);
+const is = vi.fn<(column: string, value: null) => Filters>(() => filters);
+const filters: Filters = { eq, is, select } as Filters;
+const update = vi.fn<(values: Record<string, unknown>) => Filters>(() => filters);
 const from = vi.fn<(table: string) => { update: typeof update }>(() => ({
   update,
 }));
@@ -292,6 +303,47 @@ describe("uploadLogoAction", () => {
    * carrera corriendo dos subidas que leyeron el mismo logo previo: ninguna de
    * las dos puede tocar el archivo de la otra.
    */
+  /**
+   * La escritura es un COMPARE-AND-SWAP: sólo pisa la fila si sigue apuntando
+   * al logo que esta acción leyó. Sin esa condición, dos subidas concurrentes
+   * escriben las dos, gana la última, y el archivo de la que perdió queda sin
+   * que nadie lo apunte ni lo borre nunca.
+   */
+  it("condiciona la escritura al logo que leyó", async () => {
+    const previo =
+      "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png";
+    getCurrentTenant.mockResolvedValue({ ...tenantStub, logo_url: previo });
+
+    await uploadLogoAction(idleState, logoForm());
+
+    expect(eq).toHaveBeenCalledWith("logo_url", previo);
+  });
+
+  // Sin logo previo la condición es IS NULL, no `= null`: en SQL nada es igual
+  // a null, así que un `.eq` no matchearía nunca y toda primera subida fallaría.
+  it("condiciona con IS NULL cuando el negocio no tenía logo", async () => {
+    await uploadLogoAction(idleState, logoForm());
+
+    expect(is).toHaveBeenCalledWith("logo_url", null);
+    expect(eq).not.toHaveBeenCalledWith("logo_url", null);
+  });
+
+  /**
+   * El que pierde la carrera se entera de que perdió —su UPDATE condicional no
+   * toca ninguna fila— y limpia SU PROPIO archivo antes de devolver el error.
+   * Ese es el punto: sin CAS el perdedor creía haber ganado y dejaba basura que
+   * nadie iba a juntar.
+   */
+  it("el que pierde la carrera borra su propio archivo y avisa", async () => {
+    updatedRows = [];
+
+    const result = await uploadLogoAction(idleState, logoForm());
+
+    expect(result.status).toBe("error");
+    const subido = upload.mock.calls[0]![0];
+    expect(remove).toHaveBeenCalledWith([subido]);
+  });
+
   it("con dos subidas simultáneas, ninguna borra el archivo de la otra", async () => {
     const previo =
       "https://cdn.test/storage/v1/object/public/tenant-logos/tenant-1/viejo.png";
@@ -305,8 +357,6 @@ describe("uploadLogoAction", () => {
     const subidos = upload.mock.calls.map((call) => call[0]);
     const borrados = remove.mock.calls.flatMap((call) => call[0]);
 
-    // Las dos borran el mismo archivo viejo, y sólo ese.
-    expect(borrados).toEqual(["tenant-1/viejo.png", "tenant-1/viejo.png"]);
     for (const subido of subidos) {
       expect(borrados).not.toContain(subido);
     }

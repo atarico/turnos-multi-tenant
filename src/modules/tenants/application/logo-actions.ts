@@ -89,11 +89,35 @@ export async function uploadLogoAction(
     data: { publicUrl },
   } = supabase.storage.from(BUCKET).getPublicUrl(path);
 
-  const { data, error } = await supabase
+  /**
+   * COMPARE-AND-SWAP: la escritura sólo pisa la fila si sigue apuntando al logo
+   * que esta acción leyó.
+   *
+   * Sin la condición, dos subidas concurrentes escriben las dos y gana la
+   * última. La que perdió nunca se entera: cree haber guardado, borra el logo
+   * viejo que la otra ya borró, y deja SU archivo sin que ninguna fila lo
+   * apunte ni ningún código lo vaya a borrar jamás. Ese huérfano es invisible y
+   * permanente, y se suma uno por cada carrera.
+   *
+   * Con la condición, la perdedora ve cero filas afectadas, entra por el mismo
+   * camino de error que ya existía, y limpia su propio archivo. El precio es
+   * que un doble submit ahora muestra un error en vez de ganar en silencio —
+   * ruidoso, pero honesto: el logo que quedó es el de la otra escritura, no el
+   * de ésta.
+   *
+   * `is` y no `eq` cuando no había logo previo: en SQL nada es igual a `null`,
+   * ni siquiera `null`. Un `.eq("logo_url", null)` no matchearía nunca y TODA
+   * primera subida fallaría.
+   */
+  const write = supabase
     .from("tenants")
     .update({ logo_url: publicUrl })
-    .eq("id", tenant.id)
-    .select("id");
+    .eq("id", tenant.id);
+
+  const { data, error } = await (previousUrl === null
+    ? write.is("logo_url", null)
+    : write.eq("logo_url", previousUrl)
+  ).select("id");
 
   /**
    * `error: null` no prueba que se escribió: un UPDATE que RLS recorta a cero
@@ -101,13 +125,24 @@ export async function uploadLogoAction(
    * porque el archivo YA está en el bucket: decir "listo" dejaría un logo
    * subido que la fila no apunta.
    *
+   * Cero filas ahora significa DOS cosas: que RLS lo frenó, o que otra subida
+   * ganó la carrera y el compare-and-swap de arriba no matcheó. No hace falta
+   * distinguirlas: en las dos, esta subida no quedó guardada y su archivo sobra.
+   *
    * Y hay que DESHACER la subida, no sólo avisar del error. El archivo ya
    * existe: sin borrarlo queda un objeto que nadie apunta y que nadie va a
-   * juntar nunca, y se acumula uno por cada reintento fallido.
+   * juntar nunca.
    *
-   * Se borra el recién subido y NO el anterior: la fila sigue apuntando al
-   * viejo, así que llevárselo dejaría al negocio sin logo por un error que no
-   * tuvo nada que ver con él.
+   * Se borra el recién subido y NO el anterior: la fila apunta al viejo —o al
+   * que puso la otra escritura—, así que llevárselo dejaría al negocio sin logo
+   * por un error que no tuvo nada que ver con él.
+   *
+   * LÍMITE CONOCIDO, y no lo cierra este código: si este `remove` también
+   * falla, el archivo queda huérfano igual. Son dos sistemas —Postgres y
+   * Storage— sin una transacción que los abarque, así que siempre existe una
+   * ventana. La única cura completa es un barredor: un job que borre objetos
+   * que ninguna fila referencia. No está hecho. Se deja dicho en vez de
+   * simular que la compensación alcanza.
    */
   if (error || !data || data.length === 0) {
     await supabase.storage.from(BUCKET).remove([path]);
