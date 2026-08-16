@@ -7,6 +7,7 @@ import {
   deleteStaffAction,
   saveScheduleAction,
   saveStaffAction,
+  toggleStaffActiveAction,
 } from "./actions";
 
 /**
@@ -46,11 +47,18 @@ interface QueryChain extends PromiseLike<QueryResult> {
   insert(): QueryChain;
   update(): QueryChain;
   delete(): QueryChain;
-  select(): QueryChain;
+  select(...args: unknown[]): QueryChain;
   eq(): QueryChain;
   not(): QueryChain;
   single(): Promise<QueryResult>;
 }
+
+/**
+ * Espía del `.select()`. Sin él, un UPDATE que perdiera el `.select("id")`
+ * dejaría `data` en `null`, `wroteRows` devolvería `false` y toda pausa exitosa
+ * se volvería un error visible para el usuario — sin que ningún test cayera.
+ */
+const select = vi.fn();
 
 const NEW_STAFF_ID = "staff-nuevo";
 
@@ -73,7 +81,10 @@ const chain: QueryChain = {
   insert: () => chain,
   update: () => chain,
   delete: () => chain,
-  select: () => chain,
+  select: (...args: unknown[]) => {
+    select(...args);
+    return chain;
+  },
   eq: () => chain,
   not: () => chain,
   single: async () => queryResult,
@@ -175,6 +186,51 @@ describe("saveStaffAction", () => {
 
     expect(result.status).toBe("error");
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+/** Arma el FormData del botón de activar/pausar. */
+function toggleForm(id = "staff-1", active = "false"): FormData {
+  const form = new FormData();
+  form.append("id", id);
+  form.append("active", active);
+  return form;
+}
+
+describe("toggleStaffActiveAction", () => {
+  it("pausa un profesional", async () => {
+    const result = await toggleStaffActiveAction(idleState, toggleForm());
+
+    expect(result.status).toBe("success");
+    expect(revalidatePath).toHaveBeenCalled();
+  });
+
+  it("pide la fila de vuelta para poder contar lo que escribió", async () => {
+    await toggleStaffActiveAction(idleState, toggleForm());
+
+    expect(select).toHaveBeenCalledWith("id");
+  });
+
+  /**
+   * El fallo silencioso: PostgREST devuelve `error: null` con cero filas cuando
+   * RLS recorta el UPDATE, o cuando el `id` ya no existe. Sin contar las filas,
+   * pausar un profesional borrado en otra pestaña respondía "Profesional
+   * pausado." sobre una fila que no está.
+   */
+  it("no dice que lo pausó si no se tocó ninguna fila", async () => {
+    rowsResult = { data: [], error: null };
+
+    const result = await toggleStaffActiveAction(idleState, toggleForm());
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("frena sin id, sin tocar la base", async () => {
+    const result = await toggleStaffActiveAction(idleState, toggleForm(""));
+
+    expect(result.status).toBe("error");
+    expect(from).not.toHaveBeenCalled();
   });
 });
 
