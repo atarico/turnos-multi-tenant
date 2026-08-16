@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/input";
@@ -27,38 +27,63 @@ interface SettingsFormProps {
  * dos formularios podían quedar a medias sin que nada lo dijera.
  */
 export function SettingsForm({ brandColor, logoUrl, save }: SettingsFormProps) {
-  const [state, action, pending] = useActionState(save, idleState);
-
   // El input de color va CONTROLADO: React 19 hace `requestFormReset` al
   // resolver la action y uno no controlado volvería a su `defaultValue`,
   // mostrando el color anterior justo después de guardar el nuevo.
   const [color, setColor] = useState(brandColor);
 
   /**
-   * Vista previa del archivo recién elegido, como `blob:` local.
-   *
-   * Se genera en el navegador y no espera al servidor: la gracia es ver QUÉ
-   * archivo elegiste antes de guardarlo. Guarda también la URL anterior para
-   * revocarla — cada `createObjectURL` reserva memoria hasta que se libera.
+   * Vista previa del archivo recién elegido, como `blob:` local. Se genera en
+   * el navegador y no espera al servidor: la gracia es ver QUÉ archivo elegiste
+   * antes de guardarlo.
    */
   const [preview, setPreview] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const replacePreview = (next: string | null) => {
-    setPreview((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return next;
-    });
-  };
+  /**
+   * Revoca la URL anterior cuando cambia, y también al desmontar.
+   *
+   * Cada `createObjectURL` reserva memoria hasta que se lo revoca. Revocar sólo
+   * al reemplazar dejaba esa memoria tomada por el resto de la vida de la
+   * pestaña si el usuario se iba de la pantalla con una vista previa activa: la
+   * función de limpieza del efecto cubre los dos casos con la misma línea.
+   */
+  useEffect(() => {
+    if (!preview) return;
+    return () => URL.revokeObjectURL(preview);
+  }, [preview]);
+
+  /**
+   * Al guardar bien, el servidor pasa a ser la verdad: se limpia la vista
+   * previa y el input para que la pantalla muestre el logo persistido y vuelva
+   * a ofrecer sacarlo. Sin esto la casilla de sacar —que sólo aparece cuando no
+   * hay archivo elegido— quedaba escondida, y el dueño no podía sacar el logo
+   * que acababa de subir sin recargar.
+   *
+   * Va acá y no en un efecto: esto es la respuesta a un submit, no una
+   * sincronización. Si el guardado FALLA no se limpia nada, porque perder la
+   * selección obligaría a buscar el archivo de nuevo por un error ajeno.
+   */
+  const [state, action, pending] = useActionState(
+    async (previous: ActionState, formData: FormData) => {
+      const result = await save(previous, formData);
+      if (result.status === "success") {
+        setPreview(null);
+        if (fileRef.current) fileRef.current.value = "";
+      }
+      return result;
+    },
+    idleState,
+  );
 
   const onPickFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    replacePreview(file ? URL.createObjectURL(file) : null);
+    setPreview(file ? URL.createObjectURL(file) : null);
   };
 
   const undoPick = () => {
     if (fileRef.current) fileRef.current.value = "";
-    replacePreview(null);
+    setPreview(null);
   };
 
   const fieldErrors = state.status === "error" ? state.fieldErrors : undefined;

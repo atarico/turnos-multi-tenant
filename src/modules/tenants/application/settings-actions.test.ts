@@ -271,6 +271,35 @@ describe("saveSettingsAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  /**
+   * El guard de fallo junta DOS causas distintas: un error de verdad de la
+   * base, y cero filas por RLS o porque el compare-and-swap no matcheó. El
+   * suite sólo ejercitaba la segunda; ésta cubre la primera, incluida su
+   * compensación — el archivo ya está subido y hay que deshacerlo igual.
+   */
+  it("deshace la subida cuando la base devuelve un error de verdad", async () => {
+    updateError = { message: "boom" };
+
+    const result = await saveSettingsAction(idleState, form({ logo: {} }));
+
+    expect(result.status).toBe("error");
+    const subido = upload.mock.calls[0]![0];
+    expect(remove).toHaveBeenCalledWith([subido]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("con un error de la base tampoco guarda el color", async () => {
+    updateError = { message: "boom" };
+
+    const result = await saveSettingsAction(
+      idleState,
+      form({ brandColor: "#123456" }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
   it("no borra el logo anterior si la escritura falló", async () => {
     updatedRows = [];
     getCurrentTenant.mockResolvedValue({ ...tenantStub, logo_url: VIEJO });

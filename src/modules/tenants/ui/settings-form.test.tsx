@@ -201,6 +201,79 @@ describe("SettingsForm", () => {
     ).not.toBeInTheDocument();
   });
 
+  /**
+   * Después de guardar, el servidor pasa a ser la verdad y la vista previa
+   * local sobra. Si no se limpia, la casilla de sacar el logo —que sólo
+   * aparece cuando NO hay archivo elegido— queda escondida, y el dueño no
+   * puede sacar el logo que acaba de subir sin recargar la página.
+   */
+  it("limpia la vista previa al guardar con éxito", async () => {
+    const { rerender } = render(
+      <SettingsForm
+        brandColor="#aabbcc"
+        logoUrl={null}
+        save={spySave({ status: "success", message: "Listo" })}
+      />,
+    );
+
+    pickFile();
+    await userEvent.click(saveButton());
+
+    // El server component vuelve con el logo ya guardado.
+    rerender(
+      <SettingsForm
+        brandColor="#aabbcc"
+        logoUrl="https://cdn.test/guardado.png"
+        save={spySave({ status: "success", message: "Listo" })}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: /logo/i })).toHaveAttribute(
+      "src",
+      "https://cdn.test/guardado.png",
+    );
+    expect(screen.getByLabelText(/sacar/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /deshacer/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Si el guardado falla, lo elegido tiene que seguir en pantalla: perder la
+  // selección obligaría a buscar el archivo de nuevo por un error del servidor.
+  it("conserva la vista previa si el guardado falló", async () => {
+    render(
+      <SettingsForm
+        brandColor="#aabbcc"
+        logoUrl={null}
+        save={spySave(errorState("No pudimos guardar los cambios."))}
+      />,
+    );
+
+    pickFile();
+    await userEvent.click(saveButton());
+
+    expect(screen.getByRole("img", { name: /logo/i })).toHaveAttribute(
+      "src",
+      "blob:vista-previa",
+    );
+  });
+
+  /**
+   * Cada `createObjectURL` reserva memoria hasta que se lo revoca. Sin revocar
+   * al desmontar, salir de la pantalla con una vista previa activa deja esa
+   * memoria tomada por el resto de la vida de la pestaña.
+   */
+  it("revoca la URL de la vista previa al desmontar", () => {
+    const { unmount } = render(
+      <SettingsForm brandColor="#aabbcc" logoUrl={null} save={spySave()} />,
+    );
+
+    pickFile();
+    unmount();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:vista-previa");
+  });
+
   it("limita el selector de archivos a los formatos aceptados", () => {
     render(
       <SettingsForm brandColor="#aabbcc" logoUrl={null} save={spySave()} />,
