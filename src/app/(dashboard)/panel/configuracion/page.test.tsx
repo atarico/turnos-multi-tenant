@@ -17,6 +17,11 @@ vi.mock("@/modules/tenants/application/actions", () => ({
   updateBrandingAction: vi.fn(),
 }));
 
+vi.mock("@/modules/tenants/application/logo-actions", () => ({
+  uploadLogoAction: vi.fn(),
+  removeLogoAction: vi.fn(),
+}));
+
 const tenant: Tenant = {
   id: "t1",
   slug: "acme",
@@ -71,6 +76,10 @@ describe("SettingsPage", () => {
    * el origen (env var y su fallback) ya está cubierto en los tests del panel y
    * de `public-url`. Repetirlo acá ataría este test a una decisión que no es
    * suya y lo rompería cada vez que cambie el entorno.
+   *
+   * El ancla `$` no es decorativa: con `stringContaining` este test también
+   * pasaba con `/acme-clone` o `/panel/acme-viejo`. Terminar en el slug es la
+   * afirmación que se quiso hacer desde el principio.
    */
   it("muestra el link público para que el dueño vaya a ver el resultado", async () => {
     const { getCurrentTenant } = await import(
@@ -83,7 +92,31 @@ describe("SettingsPage", () => {
 
     expect(screen.getByRole("link", { name: /acme/i })).toHaveAttribute(
       "href",
-      expect.stringContaining(`/${tenant.slug}`),
+      expect.stringMatching(new RegExp(`/${tenant.slug}$`)),
+    );
+  });
+
+  /**
+   * El logo y el color viven en la misma pantalla pero son dos cosas distintas
+   * con dos acciones distintas. Se pincha que la sección exista y que reciba el
+   * logo guardado, que es lo que la ruta tiene que cablear.
+   */
+  it("ofrece subir el logo, y muestra el que ya está guardado", async () => {
+    const { getCurrentTenant } = await import(
+      "@/modules/tenants/application/queries"
+    );
+    vi.mocked(getCurrentTenant).mockResolvedValue({
+      ...tenant,
+      logo_url: "https://cdn.test/storage/t1/logo.png",
+    });
+    const { default: SettingsPage } = await import("./page");
+
+    render(await SettingsPage());
+
+    expect(screen.getByLabelText(/logo/i)).toHaveAttribute("type", "file");
+    expect(screen.getByRole("img", { name: /logo/i })).toHaveAttribute(
+      "src",
+      "https://cdn.test/storage/t1/logo.png",
     );
   });
 });
