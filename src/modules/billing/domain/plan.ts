@@ -33,7 +33,24 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
   premium: { staff: 15, whatsappMessages: 2000, bookingsPerMonth: 5000 },
 };
 
+/**
+ * Límites del plan, o error si el plan no está en el catálogo.
+ *
+ * `PlanTier` es una unión de TypeScript y el valor real sale de una columna de
+ * la base: si alguien agrega un valor al enum de Postgres sin tocar esta
+ * tabla, el compilador no se entera. Un lookup pelado devolvería `undefined` y
+ * `hasRoomForStaff` reventaría con un TypeError sobre `.staff`, lejos de la
+ * causa. Mejor romper acá, con el nombre del plan en el mensaje.
+ */
 export function limitsFor(plan: PlanTier): PlanLimits {
+  // `Object.hasOwn` y no `=== undefined`: un objeto literal hereda de
+  // `Object.prototype`, así que una clave como `toString` devolvía una FUNCIÓN
+  // en vez de `undefined`, el guard la dejaba pasar, y `hasRoomForStaff`
+  // terminaba leyendo `.staff` sobre ella y respondiendo `false` en silencio
+  // — justo lo contrario de romper fuerte.
+  if (!Object.hasOwn(PLAN_LIMITS, plan)) {
+    throw new Error(`Plan sin límites en el catálogo: ${plan}`);
+  }
   return PLAN_LIMITS[plan];
 }
 
