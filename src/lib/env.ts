@@ -21,6 +21,14 @@ const serverEnvSchema = z.object({
    * cadena de diccionario.
    */
   BOOKING_IP_SALT: z.string().min(16, "Usá al menos 16 caracteres"),
+  /**
+   * Token de acceso de Mercado Pago. Cobra plata: nunca sale del servidor.
+   *
+   * Va sin `NEXT_PUBLIC_`, y el módulo que lo lee importa `server-only` para
+   * que un import desde un Client Component rompa el build en vez de filtrarlo
+   * al bundle.
+   */
+  MERCADOPAGO_ACCESS_TOKEN: z.string().min(1),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

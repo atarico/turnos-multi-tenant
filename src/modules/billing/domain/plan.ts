@@ -55,6 +55,30 @@ export function limitsFor(plan: PlanTier): PlanLimits {
 }
 
 /**
+ * Cómo se llama cada plan para una persona.
+ *
+ * Vive acá y no en la UI porque el primer lugar donde se lee no es una pantalla
+ * nuestra: es el resumen de la tarjeta del dueño, meses después, cuando no se
+ * acuerda qué contrató. Un renglón que diga sólo "Turnos" es un reclamo al
+ * banco esperando a pasar.
+ */
+const PLAN_LABELS: Record<PlanTier, string> = {
+  basico: "Básico",
+  pro: "Pro",
+  premium: "Premium",
+};
+
+/** Nombre visible del plan, o error si no está en el catálogo. */
+export function planLabel(plan: PlanTier): string {
+  // Mismo guard que `limitsFor`, por el mismo motivo: una clave heredada como
+  // `toString` devuelve una función, no `undefined`.
+  if (!Object.hasOwn(PLAN_LABELS, plan)) {
+    throw new Error(`Plan sin nombre en el catálogo: ${plan}`);
+  }
+  return PLAN_LABELS[plan];
+}
+
+/**
  * ¿Entra un profesional más?
  *
  * Devuelve `false` tanto al tocar el límite como estando por encima. Ese

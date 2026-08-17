@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasRoomForStaff, isOverStaffLimit, limitsFor } from "./plan";
+import { hasRoomForStaff, isOverStaffLimit, limitsFor, planLabel } from "./plan";
 
 /**
  * Los límites del plan son de dos clases distintas y conviene no mezclarlas.
@@ -119,5 +119,30 @@ describe("isOverStaffLimit", () => {
 
   it("con lugar de sobra no se pasó", () => {
     expect(isOverStaffLimit("premium", 4)).toBe(false);
+  });
+});
+
+describe("planLabel", () => {
+  /**
+   * Esto no es texto de pantalla: viaja como `reason` a Mercado Pago y termina
+   * en el resumen de la tarjeta del dueño. Que diga cuál plan es lo que evita
+   * un desconocimiento de cargo meses después.
+   */
+  it("cada plan tiene un nombre para mostrarle a una persona", () => {
+    expect(planLabel("basico")).toBe("Básico");
+    expect(planLabel("pro")).toBe("Pro");
+    expect(planLabel("premium")).toBe("Premium");
+  });
+
+  it("un plan que no está en el catálogo rompe, no devuelve undefined", () => {
+    expect(() =>
+      planLabel("enterprise" as Parameters<typeof planLabel>[0]),
+    ).toThrow();
+  });
+
+  it("una clave heredada del prototipo tampoco pasa", () => {
+    expect(() =>
+      planLabel("toString" as Parameters<typeof planLabel>[0]),
+    ).toThrow();
   });
 });
