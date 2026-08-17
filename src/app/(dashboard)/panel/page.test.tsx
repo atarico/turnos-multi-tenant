@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
+import type { Subscription } from "@/modules/billing/domain/subscription";
 import type { AgendaBooking } from "@/modules/booking/domain/types";
 import { publicBookingUrl } from "@/modules/tenants/domain/public-url";
 import type { Tenant } from "@/modules/tenants/domain/types";
@@ -22,6 +23,10 @@ vi.mock("@/modules/booking/application/queries", () => ({
     ok: true,
     value: { totalCents: 0, currency: "ARS" },
   })),
+}));
+// Por defecto, un negocio sin suscripción: el panel tiene que pintarse igual.
+vi.mock("@/modules/billing/application/queries", () => ({
+  getCurrentSubscription: vi.fn(async () => null),
 }));
 
 const tenant: Tenant = {
@@ -52,6 +57,23 @@ const agendaBooking = (
   startsAt: fromNow(offsetMs),
   endsAt: fromNow(offsetMs + HOUR),
   status: "confirmed",
+});
+
+/** Una suscripción en prueba que vence dentro de `offsetMs` desde ahora. */
+const trialSubscription = (offsetMs: number): Subscription => ({
+  id: "sub-1",
+  tenantId: tenant.id,
+  plan: "basico",
+  status: "trialing",
+  currentPeriodStart: new Date(Date.now() - HOUR),
+  currentPeriodEnd: new Date(Date.now() + offsetMs),
+  trialEndsAt: new Date(Date.now() + offsetMs),
+  priceUsdCents: 0,
+  chargedAmountCents: null,
+  chargedCurrency: "ARS",
+  fxRate: null,
+  fxSource: null,
+  fxQuotedAt: null,
 });
 
 /** El valor pintado en la tarjeta de métrica con esa etiqueta. */
@@ -102,6 +124,57 @@ describe("PanelPage", () => {
         "href",
         publicBookingUrl("https://turnos.app", "acme"),
       );
+    },
+  );
+
+  /**
+   * El dueño tiene que saber cuánto le queda de prueba SIN ir a buscarlo. Es
+   * la única señal de que el reloj está corriendo, y aparece al lado del plan
+   * porque son la misma pregunta: qué tengo y hasta cuándo.
+   */
+  it(
+    "avisa cuántos días de prueba quedan",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { getCurrentSubscription } = await import(
+        "@/modules/billing/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(getCurrentSubscription).mockResolvedValue(
+        trialSubscription(6 * 24 * HOUR),
+      );
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.getByText(/prueba · 6 días/i)).toBeInTheDocument();
+    },
+  );
+
+  // Sin prueba corriendo no se pinta nada: un cartel de prueba en una cuenta
+  // paga confundiría más de lo que informa.
+  it(
+    "no muestra el cartel de prueba cuando la prueba venció",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { getCurrentSubscription } = await import(
+        "@/modules/billing/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(getCurrentSubscription).mockResolvedValue(
+        trialSubscription(-HOUR),
+      );
+      const { default: PanelPage } = await import("./page");
+
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.queryByText(/prueba ·/i)).not.toBeInTheDocument();
     },
   );
 

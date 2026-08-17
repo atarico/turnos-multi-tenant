@@ -18,6 +18,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { signOutAction } from "@/modules/auth/application/actions";
+import { getCurrentSubscription } from "@/modules/billing/application/queries";
+import { isInTrial, trialDaysLeft } from "@/modules/billing/domain/subscription";
 import {
   countBookingsOnDay,
   listBookingsToClose,
@@ -70,17 +72,30 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   // instante. Si cada consulta leyera el suyo, un turno que termina entre las
   // dos lecturas cumpliría los dos filtros y se pintaría duplicado.
   const now = new Date();
-  const [bookingsResult, toCloseResult, todayCountResult, revenueResult] =
-    await Promise.all([
-      listUpcomingBookings(tenant.id, now),
-      listBookingsToClose(tenant.id, now),
-      countBookingsOnDay(tenant.id, todayInTz(tenant.timezone), tenant.timezone),
-      sumMonthlyRevenue(
-        tenant.id,
-        currentMonthInTz(tenant.timezone),
-        tenant.timezone,
-      ),
-    ]);
+  const [
+    bookingsResult,
+    toCloseResult,
+    todayCountResult,
+    revenueResult,
+    subscription,
+  ] = await Promise.all([
+    listUpcomingBookings(tenant.id, now),
+    listBookingsToClose(tenant.id, now),
+    countBookingsOnDay(tenant.id, todayInTz(tenant.timezone), tenant.timezone),
+    sumMonthlyRevenue(
+      tenant.id,
+      currentMonthInTz(tenant.timezone),
+      tenant.timezone,
+    ),
+    getCurrentSubscription(tenant.id),
+  ]);
+
+  // Mismo `now` que la agenda: el cartel de prueba y las listas tienen que
+  // estar mirando el mismo instante.
+  const trialDays =
+    subscription && isInTrial(subscription, now)
+      ? trialDaysLeft(subscription, now)
+      : 0;
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
@@ -115,6 +130,11 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
               {tenant.name}
             </h1>
             <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
+            {trialDays > 0 && (
+              <span className="text-sm text-muted">
+                Prueba · {trialDays} {trialDays === 1 ? "día" : "días"}
+              </span>
+            )}
             <span className="text-sm text-muted">
               {COUNTRY_LABELS[tenant.country]}
             </span>
