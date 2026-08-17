@@ -38,6 +38,30 @@ describe("limitsFor", () => {
   });
 
   /**
+   * `PlanTier` es una unión de TypeScript y el valor real sale de una columna
+   * de la base. Si alguien agrega un valor al enum de Postgres sin tocar el
+   * catálogo, el lookup devolvía `undefined` y `hasRoomForStaff` reventaba con
+   * un TypeError sobre `.staff` en vez de dar un error de dominio. Romper acá
+   * es romper cerca del origen.
+   */
+  it("un plan que no está en el catálogo rompe, no devuelve undefined", () => {
+    expect(() =>
+      limitsFor("enterprise" as Parameters<typeof limitsFor>[0]),
+    ).toThrow();
+  });
+
+  /**
+   * Una clave HEREDADA de `Object.prototype` devolvía una FUNCIÓN, no
+   * `undefined`: el guard la dejaba pasar y `hasRoomForStaff` leía `.staff`
+   * sobre ella, respondiendo `false` en silencio en vez de romper.
+   */
+  it("una clave heredada del prototipo tampoco pasa", () => {
+    expect(() =>
+      limitsFor("toString" as Parameters<typeof limitsFor>[0]),
+    ).toThrow();
+  });
+
+  /**
    * El orden importa para poder vender: si un plan más caro no diera MÁS de
    * cada cosa, no habría razón para subir. Se prueba la relación, no los
    * números, así el día que se muevan las cifras este test sigue teniendo
