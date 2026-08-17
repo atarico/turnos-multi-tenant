@@ -97,9 +97,11 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ rpc, from }),
 }));
 
+// El plan viaja en el negocio, así que el cupo se resuelve sin una consulta más.
 const getCurrentTenant = vi.fn(async (): Promise<unknown> => ({
   id: "tenant-1",
   slug: "negocio",
+  plan: "basico",
 }));
 vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: () => getCurrentTenant(),
@@ -108,8 +110,13 @@ vi.mock("@/modules/tenants/application/queries", () => ({
 const getStaffMember = vi.fn(async (): Promise<unknown> =>
   ok({ id: "staff-1", name: "Ana", role: null, active: true, serviceIds: [] }),
 );
+const countActiveStaff = vi.fn<
+  (tenantId: string, excludeStaffId?: string) => Promise<unknown>
+>(async () => ok(0));
 vi.mock("./queries", () => ({
   getStaffMember: () => getStaffMember(),
+  countActiveStaff: (tenantId: string, excludeStaffId?: string) =>
+    countActiveStaff(tenantId, excludeStaffId),
 }));
 
 /** Arma el FormData tal como lo manda el editor de horarios. */
@@ -132,6 +139,14 @@ beforeEach(() => {
   rpc.mockResolvedValue({ data: "deleted", error: null });
   queryResult = { data: { id: NEW_STAFF_ID }, error: null };
   rowsResult = { data: [{ id: "staff-1" }], error: null };
+  // `clearAllMocks` limpia llamadas, NO implementaciones: sin este reset, un
+  // `mockResolvedValue` puesto en un test se filtra a todos los siguientes.
+  countActiveStaff.mockResolvedValue(ok(0));
+  getCurrentTenant.mockResolvedValue({
+    id: "tenant-1",
+    slug: "negocio",
+    plan: "basico",
+  });
 });
 
 /** Arma el FormData tal como lo manda el formulario de profesionales. */
@@ -187,6 +202,69 @@ describe("saveStaffAction", () => {
     expect(result.status).toBe("error");
     expect(revalidatePath).not.toHaveBeenCalled();
   });
+
+  /**
+   * El cupo de profesionales es el límite de STOCK del plan, y sólo se chequea
+   * en el ALTA. Básico llega a 2 activos.
+   */
+  it("no da de alta si el plan ya está lleno", async () => {
+    countActiveStaff.mockResolvedValue(ok(2));
+
+    const result = await saveStaffAction(idleState, staffForm());
+
+    expect(result.status).toBe("error");
+    expect(from).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  // En el alta no hay a quién excluir del conteo: el profesional todavía no existe.
+  it("cuenta el cupo contra el negocio actual, sin excluir a nadie", async () => {
+    await saveStaffAction(idleState, staffForm());
+
+    expect(countActiveStaff).toHaveBeenCalledWith("tenant-1", undefined);
+  });
+
+  it("un plan más grande deja pasar el mismo alta", async () => {
+    getCurrentTenant.mockResolvedValue({
+      id: "tenant-1",
+      slug: "negocio",
+      plan: "pro",
+    });
+    countActiveStaff.mockResolvedValue(ok(2));
+
+    const result = await saveStaffAction(idleState, staffForm());
+
+    expect(result.status).not.toBe("error");
+  });
+
+  /**
+   * LO QUE NO SE PUEDE ROMPER: un negocio que bajó de plan queda POR ENCIMA del
+   * cupo, y aun así tiene que poder editar lo que ya tiene. Si el guard se
+   * colara en la edición, alguien con 9 profesionales en Básico no podría ni
+   * corregir un nombre mal escrito.
+   */
+  it("deja editar aunque el negocio esté por encima del cupo", async () => {
+    countActiveStaff.mockResolvedValue(ok(9));
+
+    const result = await saveStaffAction(idleState, staffForm("staff-1"));
+
+    expect(result.status).toBe("success");
+  });
+
+  /**
+   * Si no se pudo contar, no se da de alta a ciegas: dejar pasar el alta ante
+   * la duda convierte el cupo en una sugerencia.
+   */
+  it("no da de alta a ciegas si no se pudo verificar el cupo", async () => {
+    countActiveStaff.mockResolvedValue(
+      err(appError("staff_query_failed", "boom")),
+    );
+
+    const result = await saveStaffAction(idleState, staffForm());
+
+    expect(result.status).toBe("error");
+    expect(from).not.toHaveBeenCalled();
+  });
 });
 
 /** Arma el FormData del botón de activar/pausar. */
@@ -228,6 +306,62 @@ describe("toggleStaffActiveAction", () => {
 
   it("frena sin id, sin tocar la base", async () => {
     const result = await toggleStaffActiveAction(idleState, toggleForm(""));
+
+    expect(result.status).toBe("error");
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  /**
+   * EL AGUJERO QUE CIERRA ESTE GUARD. Como el cupo cuenta sólo activos, pausar
+   * libera un lugar — y sin chequear la reactivación se podía dar la vuelta
+   * completa: pausar a uno, crear otro, y reactivar al pausado. Tres clics para
+   * terminar por encima del límite del plan.
+   */
+  it("no reactiva si el plan ya está lleno con los otros", async () => {
+    countActiveStaff.mockResolvedValue(ok(2));
+
+    const result = await toggleStaffActiveAction(
+      idleState,
+      toggleForm("staff-1", "true"),
+    );
+
+    expect(result.status).toBe("error");
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El conteo excluye al profesional que se está tocando. Sin la exclusión,
+   * reactivar a alguien que YA estaba activo se contaría a sí mismo y daría
+   * "límite alcanzado" sobre una operación que no cambia nada.
+   */
+  it("al reactivar no se cuenta a sí mismo", async () => {
+    await toggleStaffActiveAction(idleState, toggleForm("staff-1", "true"));
+
+    expect(countActiveStaff).toHaveBeenCalledWith("tenant-1", "staff-1");
+  });
+
+  /**
+   * Pausar NUNCA se bloquea: siempre baja la cuenta. Y es justo la salida del
+   * negocio que quedó por encima del cupo — trabarla lo dejaría encerrado.
+   */
+  it("pausar no consulta el cupo ni se bloquea nunca", async () => {
+    countActiveStaff.mockResolvedValue(ok(99));
+
+    const result = await toggleStaffActiveAction(idleState, toggleForm());
+
+    expect(result.status).toBe("success");
+    expect(countActiveStaff).not.toHaveBeenCalled();
+  });
+
+  it("no reactiva a ciegas si no se pudo verificar el cupo", async () => {
+    countActiveStaff.mockResolvedValue(
+      err(appError("staff_count_failed", "boom")),
+    );
+
+    const result = await toggleStaffActiveAction(
+      idleState,
+      toggleForm("staff-1", "true"),
+    );
 
     expect(result.status).toBe("error");
     expect(from).not.toHaveBeenCalled();
