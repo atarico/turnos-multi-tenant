@@ -3,6 +3,8 @@ import "server-only";
 import { appError, err, ok, type Result } from "@/core/result";
 import { serverEnv } from "@/lib/env";
 
+import type { WebhookEventKind } from "../domain/webhook-event";
+
 /**
  * Lo que hace falta para abrir una suscripción en Mercado Pago.
  *
@@ -30,7 +32,20 @@ export interface PreapprovalSession {
   initPoint: string;
 }
 
-const ENDPOINT = "https://api.mercadopago.com/preapproval";
+const PREAPPROVAL_ENDPOINT = "https://api.mercadopago.com/preapproval";
+
+/**
+ * De dónde se lee UN cobro mensual concreto.
+ *
+ * OJO: esta ruta es lo primero que hay que confirmar contra el sandbox. Los
+ * docs de Mercado Pago documentan el topic `subscription_authorized_payment`
+ * pero no publican el GET del recurso con la misma claridad que el de
+ * `/preapproval`. Si estuviera mal, el síntoma es un 404 sistemático que se
+ * ve como `mp_rejected` en el log del webhook — ruidoso, que es como se
+ * quería que fallara.
+ */
+const AUTHORIZED_PAYMENT_ENDPOINT =
+  "https://api.mercadopago.com/authorized_payments";
 
 /**
  * Corte de tiempo, más largo que el de la cotización porque del otro lado hay
@@ -135,7 +150,7 @@ export async function createPreapproval(
 
   let response: Response;
   try {
-    response = await fetch(ENDPOINT, {
+    response = await fetch(PREAPPROVAL_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -189,4 +204,107 @@ export async function createPreapproval(
   if (!usableString(id) || !usableString(initPoint)) return badResponse();
 
   return ok({ providerSubscriptionId: id, initPoint });
+}
+
+/**
+ * El estado real de un recurso de suscripción, tal cual lo dice Mercado Pago.
+ *
+ * `providerStatus` viaja SIN traducir a propósito. La traducción a nuestro
+ * enum vive en `webhook-event.ts`, que es puro y se prueba sin red; si se
+ * hiciera acá habría que levantar un `fetch` falso para probar cada mapeo.
+ */
+export interface ProviderSubscriptionEvent {
+  /**
+   * El id del preapproval. Es la llave a NUESTRA fila: el webhook no trae
+   * sesión ni negocio, así que esto es lo único que ata el aviso a alguien.
+   */
+  providerSubscriptionId: string;
+  providerStatus: string;
+}
+
+/**
+ * Corte de tiempo para las lecturas del webhook.
+ *
+ * Más corto que el de la escritura, y por una razón concreta: Mercado Pago
+ * corta la notificación a los 22 segundos y la reintenta si no le contestamos
+ * a tiempo. Después de esta lectura todavía falta escribir en la base, así que
+ * el presupuesto se reparte. Quedarse esperando diez segundos acá es la forma
+ * de que el webhook entero se pase de tiempo y todo llegue dos veces.
+ */
+const READ_TIMEOUT_MS = 5_000;
+
+/**
+ * Le pregunta a Mercado Pago qué pasó de verdad con un recurso.
+ *
+ * ES OBLIGATORIO Y NO ES UNA PRECAUCIÓN. La notificación del webhook trae un
+ * id y nada más — nunca dice si el cobro salió bien. Sin este llamado, quien
+ * mande una notificación tendría que ser creído sobre el estado, y activar
+ * suscripciones a partir de lo que dice un cuerpo de request es exactamente lo
+ * que la firma existe para evitar.
+ *
+ * Los dos recursos se leen distinto y terminan igual: en el preapproval el id
+ * del recurso YA ES el de la suscripción; en un cobro hay que sacar el
+ * `preapproval_id`, porque el id del cobro no dice nada de quién lo hizo.
+ */
+export async function fetchSubscriptionEvent(
+  kind: WebhookEventKind,
+  resourceId: string,
+): Promise<Result<ProviderSubscriptionEvent>> {
+  const base =
+    kind === "preapproval"
+      ? PREAPPROVAL_ENDPOINT
+      : AUTHORIZED_PAYMENT_ENDPOINT;
+
+  // `encodeURIComponent` y no interpolación pelada: `resourceId` sale del
+  // cuerpo de la notificación, o sea de afuera. Un id con `../` o con `?`
+  // dejaría armar la ruta que quien manda la notificación prefiera, contra la
+  // API de Mercado Pago y con NUESTRO token en el header.
+  const url = `${base}/${encodeURIComponent(resourceId)}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${serverEnv().MERCADOPAGO_ACCESS_TOKEN}`,
+      },
+      signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+      // Se está preguntando por algo que ACABA de cambiar: una respuesta
+      // cacheada devolvería el estado anterior y el cobro no se aplicaría.
+      cache: "no-store",
+    });
+  } catch {
+    return unreachable();
+  }
+
+  if (!response.ok) {
+    return response.status >= 500 ? unreachable() : rejected();
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return badResponse();
+  }
+
+  const { status, preapproval_id: preapprovalId } = (body ?? {}) as {
+    status?: unknown;
+    preapproval_id?: unknown;
+  };
+
+  if (!usableString(status)) return badResponse();
+
+  // FALLA CERRADO. Un cobro sin `preapproval_id` no se puede atar a ninguna
+  // suscripción, y elegir una es peor que no hacer nada.
+  const providerSubscriptionId =
+    kind === "preapproval"
+      ? resourceId
+      : usableString(preapprovalId)
+        ? preapprovalId
+        : null;
+
+  if (!providerSubscriptionId) return badResponse();
+
+  return ok({ providerSubscriptionId, providerStatus: status });
 }

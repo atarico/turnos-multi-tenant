@@ -29,6 +29,18 @@ const serverEnvSchema = z.object({
    * al bundle.
    */
   MERCADOPAGO_ACCESS_TOKEN: z.string().min(1),
+  /**
+   * Secreto de la firma del webhook. NO es el access token y no se puede
+   * derivar de él: se copia del panel de Mercado Pago, en la configuración de
+   * la notificación (Tus integraciones > tu aplicación > Webhooks).
+   *
+   * Es lo único que separa una notificación de Mercado Pago de una que mandó
+   * cualquiera que sepa la URL, y del otro lado hay una función que activa
+   * planes pagos. Sin esto configurado el portón queda CERRADO —
+   * `isValidWebhookSignature` devuelve false ante un secreto vacío — y ningún
+   * cobro se aplica.
+   */
+  MERCADOPAGO_WEBHOOK_SECRET: z.string().min(1),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

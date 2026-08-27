@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createPreapproval, type PreapprovalDraft } from "./mercadopago";
+import {
+  createPreapproval,
+  fetchSubscriptionEvent,
+  type PreapprovalDraft,
+} from "./mercadopago";
 
 /**
  * Tests del adaptador de Mercado Pago.
@@ -291,5 +295,142 @@ describe("createPreapproval", () => {
     const session = await createPreapproval(draft);
     expect(session.ok).toBe(false);
     expect(!session.ok && session.error.message).not.toContain("TEST-token");
+  });
+});
+
+/**
+ * Tests del lado de LECTURA del adaptador.
+ *
+ * La notificación del webhook trae un id y nada más: nunca dice si el cobro
+ * salió bien. Preguntárselo a Mercado Pago no es una precaución, es la única
+ * forma de saberlo — y es lo que impide que alguien que adivine un id de
+ * recurso active una suscripción diciendo "está pago".
+ */
+describe("fetchSubscriptionEvent", () => {
+  it("lee el estado de una suscripción por su preapproval", async () => {
+    fetchMock.mockResolvedValue(
+      okResponse({ id: "MP-PREAPPROVAL-1", status: "authorized" }),
+    );
+
+    const event = await fetchSubscriptionEvent("preapproval", "MP-PREAPPROVAL-1");
+
+    expect(event.ok && event.value).toEqual({
+      providerSubscriptionId: "MP-PREAPPROVAL-1",
+      providerStatus: "authorized",
+    });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(
+      "/preapproval/MP-PREAPPROVAL-1",
+    );
+  });
+
+  it("de un cobro saca el preapproval al que pertenece", async () => {
+    // ES EL DATO QUE IMPORTA. El id del cobro no dice nada de quién lo hizo:
+    // sin `preapproval_id` no hay forma de llegar a nuestra fila.
+    fetchMock.mockResolvedValue(
+      okResponse({
+        id: "9876543210",
+        preapproval_id: "MP-PREAPPROVAL-1",
+        status: "processed",
+      }),
+    );
+
+    const event = await fetchSubscriptionEvent("authorized_payment", "9876543210");
+
+    expect(event.ok && event.value).toEqual({
+      providerSubscriptionId: "MP-PREAPPROVAL-1",
+      providerStatus: "processed",
+    });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(
+      "/authorized_payments/9876543210",
+    );
+  });
+
+  it("va con el token en el header", async () => {
+    fetchMock.mockResolvedValue(okResponse({ id: "x", status: "authorized" }));
+    await fetchSubscriptionEvent("preapproval", "x");
+
+    const options = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((options.headers as Record<string, string>).Authorization).toBe(
+      "Bearer TEST-token-de-prueba",
+    );
+  });
+
+  it("escapa el id en la URL en vez de pegarlo crudo", async () => {
+    // El id viene del cuerpo de la notificación, o sea de afuera. Pegarlo sin
+    // escapar deja armar la ruta que quien manda la notificación prefiera.
+    fetchMock.mockResolvedValue(okResponse({ id: "x", status: "authorized" }));
+    await fetchSubscriptionEvent("preapproval", "../../v1/payments/1");
+
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("../..");
+  });
+
+  it("no cachea la lectura", async () => {
+    // Se está preguntando por algo que acaba de cambiar. Una respuesta cacheada
+    // devolvería el estado anterior y el cobro no se aplicaría.
+    fetchMock.mockResolvedValue(okResponse({ id: "x", status: "authorized" }));
+    await fetchSubscriptionEvent("preapproval", "x");
+
+    const options = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(options.cache).toBe("no-store");
+  });
+
+  it("un 5xx es transitorio y se puede reintentar", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(!event.ok && event.error.code).toBe("mp_unreachable");
+  });
+
+  it("la red caída también", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNRESET"));
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(!event.ok && event.error.code).toBe("mp_unreachable");
+  });
+
+  it("un 404 no se reintenta: ese recurso no existe", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 } as Response);
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(!event.ok && event.error.code).toBe("mp_rejected");
+  });
+
+  it("una respuesta sin estado no se puede usar", async () => {
+    fetchMock.mockResolvedValue(okResponse({ id: "x" }));
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(!event.ok && event.error.code).toBe("mp_bad_response");
+  });
+
+  it("un cobro sin `preapproval_id` no se puede atar a nadie", async () => {
+    // FALLA CERRADO. Sin el preapproval no hay a qué suscripción aplicarlo, y
+    // adivinar es peor que no hacer nada.
+    fetchMock.mockResolvedValue(okResponse({ id: "9876", status: "processed" }));
+
+    const event = await fetchSubscriptionEvent("authorized_payment", "9876");
+    expect(!event.ok && event.error.code).toBe("mp_bad_response");
+  });
+
+  it("un cuerpo que no es JSON tampoco", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token");
+      },
+    } as unknown as Response);
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(!event.ok && event.error.code).toBe("mp_bad_response");
+  });
+
+  it("ningún mensaje de error arrastra el token", async () => {
+    fetchMock.mockRejectedValue(
+      new Error("connect ETIMEDOUT TEST-token-de-prueba"),
+    );
+
+    const event = await fetchSubscriptionEvent("preapproval", "x");
+    expect(event.ok).toBe(false);
+    expect(!event.ok && event.error.message).not.toContain("TEST-token");
   });
 });
