@@ -83,6 +83,24 @@ function metricValue(label: string): string {
 }
 
 describe("PanelPage", () => {
+  // Mismo timeout ampliado que sus vecinos: bajo contención de CPU en la
+  // suite completa este test mide ~6.7s y el default de 5000ms flakea.
+  it("deja llegar a la suscripción desde el plan", { timeout: 15000 }, async () => {
+    // Sin este link la pantalla de suscripción existe y no la encuentra nadie:
+    // el dueño no tiene forma de contratar un plan.
+    const { getCurrentTenant } = await import(
+      "@/modules/tenants/application/queries"
+    );
+    vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+    const { default: PanelPage } = await import("./page");
+
+    render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+    expect(
+      screen.getByRole("link", { name: /ver tu suscripción/i }),
+    ).toHaveAttribute("href", "/panel/suscripcion");
+  });
+
   it(
     "manda a la bienvenida cuando la cuenta todavía no tiene negocio",
     { timeout: 15000 },

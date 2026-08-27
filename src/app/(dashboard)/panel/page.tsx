@@ -129,7 +129,18 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
             <h1 className="font-display text-2xl font-semibold tracking-tight">
               {tenant.name}
             </h1>
-            <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
+            {/* El plan lleva a su pantalla. Es el único lugar del panel donde
+                el dueño ya está mirando su plan, así que es donde va a buscar
+                cómo cambiarlo — meterlo en la barra de links de arriba lo
+                escondería entre Servicios y Configuración. */}
+            <Link href="/panel/suscripcion" aria-label="Ver tu suscripción">
+              <Badge
+                variant="gold"
+                className="transition-colors hover:bg-gold/20"
+              >
+                {PLAN_LABELS[tenant.plan]}
+              </Badge>
+            </Link>
             {trialDays > 0 && (
               <span className="text-sm text-muted">
                 Prueba · {trialDays} {trialDays === 1 ? "día" : "días"}
