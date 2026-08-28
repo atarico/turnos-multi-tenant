@@ -186,34 +186,6 @@ export async function createPreapproval(
   }
 
   if (!response.ok) {
-    // TEMPORAL — DIAGNÓSTICO DEL SANDBOX. BORRAR CUANDO EL COBRO ENTRE.
-    //
-    // `rejected()` le dice al dueño "Mercado Pago rechazó la solicitud" y nada
-    // más, que es lo correcto de cara a la pantalla. Pero el motivo real viaja
-    // en el cuerpo de la respuesta y hoy se descarta, así que desde afuera no
-    // se puede distinguir un token cortado de un pagador inválido de un monto
-    // fuera de rango. Esto lo deja en los logs del servidor.
-    //
-    // El cuerpo de error de Mercado Pago NO trae el token: es un mensaje sobre
-    // la request, no un eco de los headers.
-    // Todo dentro del `try`: los dobles de los tests sólo implementan `json()`,
-    // y un diagnóstico que rompe la suite no es un diagnóstico. Si no se puede
-    // leer el cuerpo, se pierde el log y NO el camino de error de abajo.
-    try {
-      console.warn(
-        "[mp-preapproval] rechazo",
-        JSON.stringify({
-          status: response.status,
-          payerEmail: draft.payerEmail,
-          amountArsCents,
-          backUrl: draft.backUrl,
-          body: (await response.text()).slice(0, 600),
-        }),
-      );
-    } catch {
-      console.warn("[mp-preapproval] rechazo sin cuerpo legible", response.status);
-    }
-
     return response.status >= 500 ? unreachable() : rejected();
   }
 

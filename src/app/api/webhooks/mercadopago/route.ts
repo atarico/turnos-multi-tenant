@@ -1,9 +1,6 @@
 import { serverEnv } from "@/lib/env";
 import { applyWebhookNotification } from "@/modules/billing/application/webhook";
-import {
-  diagnoseWebhookSignature,
-  isValidWebhookSignature,
-} from "@/modules/billing/domain/webhook-signature";
+import { isValidWebhookSignature } from "@/modules/billing/domain/webhook-signature";
 
 /**
  * El webhook de Mercado Pago. EL ÚNICO PORTÓN DEL PROYECTO ABIERTO A INTERNET.
@@ -13,7 +10,7 @@ import {
  * notificación real de una inventada es la firma, y detrás de este archivo hay
  * una función que pone planes pagos. Por eso el orden no se negocia:
  *
- *   1. Firma. Antes de tocar la base, antes de todo.
+ *   1. Firma. Antes de leer el cuerpo, antes de tocar la base, antes de todo.
  *   2. Recién ahí, el cuerpo.
  *
  * Y ni siquiera la firma alcanza para creerle al cuerpo: prueba que el AVISO
@@ -44,27 +41,6 @@ const NOT_RETRYABLE = new Set(["mp_bad_response"]);
 /** Nada de cuerpo hacia afuera. Ver la nota en el `catch`. */
 const respond = (status: number) => new Response(null, { status });
 
-/**
- * TEMPORAL — DIAGNÓSTICO DEL SANDBOX. BORRAR CUANDO LA FIRMA VALIDE.
- *
- * Saca del cuerpo los ids que Mercado Pago PODRÍA haber firmado cuando el
- * query param `data.id` no viene en la URL, que es lo que hace el simulador
- * del panel. Si el manifiesto armado con alguno de estos valida, ese es el
- * diagnóstico y la corrección es leer el id del cuerpo como respaldo.
- */
-function candidateIdsFromBody(raw: string): string[] {
-  try {
-    const body = JSON.parse(raw) as { id?: unknown; data?: { id?: unknown } };
-    const ids = [body?.data?.id, body?.id];
-
-    return ids
-      .filter((id) => typeof id === "string" || typeof id === "number")
-      .map((id) => String(id));
-  } catch {
-    return [];
-  }
-}
-
 export async function POST(request: Request): Promise<Response> {
   // `serverEnv()` TIRA si falta la variable, y una excepción acá sería un 500.
   // Con el secreto sin configurar el portón tiene que quedar CERRADO —401— y
@@ -82,45 +58,22 @@ export async function POST(request: Request): Promise<Response> {
   // todas las notificaciones legítimas se rechacen.
   const dataId = new URL(request.url).searchParams.get("data.id");
 
-  // El cuerpo se LEE acá pero no se ACTÚA sobre él hasta después del portón.
-  // Leerlo antes es sólo mover bytes; el orden que importa —no tocar la base
-  // sin firma válida— sigue intacto más abajo. Un cuerpo ilegible no es motivo
-  // para rechazar: eso lo decide la firma.
-  let rawBody = "";
-  try {
-    rawBody = await request.text();
-  } catch {
-    rawBody = "";
-  }
-
-  const signature = {
-    signatureHeader: request.headers.get("x-signature"),
-    requestId: request.headers.get("x-request-id"),
-    dataId,
-    secret,
-    now: new Date(),
-  };
-
-  if (!isValidWebhookSignature(signature)) {
-    // TEMPORAL — BORRAR JUNTO CON `candidateIdsFromBody` Y EL IMPORT DE
-    // `diagnoseWebhookSignature`. El 401 de afuera no dice en qué paso frenó,
-    // a propósito; esto lo dice del lado del servidor, en los logs de Vercel.
-    // No registra el secreto: el manifiesto y un prefijo de hash no permiten
-    // reconstruirlo.
-    console.warn(
-      "[mp-webhook] firma rechazada",
-      JSON.stringify(
-        diagnoseWebhookSignature(signature, candidateIdsFromBody(rawBody)),
-      ),
-    );
-
+  if (
+    !isValidWebhookSignature({
+      signatureHeader: request.headers.get("x-signature"),
+      requestId: request.headers.get("x-request-id"),
+      dataId,
+      secret,
+      now: new Date(),
+    })
+  ) {
     return respond(401);
   }
 
-  // Probó ser Mercado Pago. Recién ahora se interpreta el cuerpo.
+  // Probó ser Mercado Pago. Recién ahora se lee el cuerpo.
   let body: unknown;
   try {
-    body = JSON.parse(rawBody);
+    body = await request.json();
   } catch {
     // La firma ya validó, o sea que esto vino de ellos con un cuerpo que no
     // podemos leer. 200 igual: un 4xx lo haría reintentar cada quince minutos
