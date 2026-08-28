@@ -202,3 +202,111 @@ export function isValidWebhookSignature(input: WebhookSignatureInput): boolean {
 
   return hashesMatch(expected, parsed.v1);
 }
+
+// ============================================================================
+// TEMPORAL — SOLO DIAGNÓSTICO. BORRAR JUNTO CON EL LOGGING DE route.ts.
+//
+// El portón devuelve el mismo 401 con cuerpo vacío ante cualquier motivo, que
+// es lo correcto de cara a afuera pero deja sin señal a quien integra. Esto
+// existe para una sola pregunta: cuál de los pasos frena a las notificaciones
+// del simulador de Mercado Pago.
+//
+// NO se registra el secreto. El manifiesto y un prefijo de hash no permiten
+// reconstruirlo: para eso habría que invertir un HMAC-SHA256.
+// ============================================================================
+
+/** Lo que se pudo observar de un intento de verificación, paso por paso. */
+export interface WebhookSignatureDiagnosis {
+  hasSecret: boolean;
+  headerParsed: boolean;
+  ts: string | null;
+  /** Cuántos segundos pasaron desde que se firmó. Negativo = firma futura. */
+  ageSeconds: number | null;
+  fresh: boolean;
+  hasDataId: boolean;
+  hasRequestId: boolean;
+  manifest: string | null;
+  expectedPrefix: string | null;
+  receivedPrefix: string | null;
+  matches: boolean;
+  /**
+   * Si alguno de los ids alternativos produce una firma válida, cuál.
+   *
+   * Es la pregunta concreta del candidato 2: el simulador no manda `data.id`
+   * en el query string, y si Mercado Pago igual lo firmó, el id está en el
+   * cuerpo. Que acá aparezca un valor ES el diagnóstico.
+   */
+  matchingAlternateId: string | null;
+}
+
+/** Los primeros ocho caracteres de un hash. Suficiente para comparar a ojo. */
+const PREFIX_LENGTH = 8;
+
+export function diagnoseWebhookSignature(
+  input: WebhookSignatureInput,
+  alternateDataIds: readonly string[] = [],
+): WebhookSignatureDiagnosis {
+  const base: WebhookSignatureDiagnosis = {
+    hasSecret: typeof input.secret === "string" && input.secret.trim() !== "",
+    headerParsed: false,
+    ts: null,
+    ageSeconds: null,
+    fresh: false,
+    hasDataId: Boolean(input.dataId),
+    hasRequestId: Boolean(input.requestId),
+    manifest: null,
+    expectedPrefix: null,
+    receivedPrefix: null,
+    matches: false,
+    matchingAlternateId: null,
+  };
+
+  const parsed = parseSignatureHeader(input.signatureHeader);
+  if (!parsed) return base;
+
+  const rawTs = Number(parsed.ts);
+  const signedAtMs = /^\d+$/.test(parsed.ts)
+    ? rawTs >= MILLISECONDS_THRESHOLD
+      ? rawTs
+      : rawTs * 1000
+    : null;
+
+  const diagnosis: WebhookSignatureDiagnosis = {
+    ...base,
+    headerParsed: true,
+    ts: parsed.ts,
+    ageSeconds:
+      signedAtMs === null
+        ? null
+        : Math.round((input.now.getTime() - signedAtMs) / 1000),
+    fresh: isFresh(parsed.ts, input.now),
+    receivedPrefix: parsed.v1.slice(0, PREFIX_LENGTH),
+  };
+
+  if (!base.hasSecret) return diagnosis;
+
+  const hashFor = (dataId: string | null) => {
+    const manifest = buildManifest(dataId, input.requestId, parsed.ts);
+    const expected = createHmac("sha256", input.secret)
+      .update(manifest)
+      .digest("hex");
+    return { manifest, expected };
+  };
+
+  const primary = hashFor(input.dataId);
+
+  // Se prueban los ids alternativos aunque el principal haya coincidido: si dos
+  // coinciden, el manifiesto no es lo que está mal y hay que mirar otra cosa.
+  const matchingAlternateId =
+    alternateDataIds.find((candidate) =>
+      hashesMatch(hashFor(candidate).expected, parsed.v1),
+    ) ?? null;
+
+  return {
+    ...diagnosis,
+    manifest: primary.manifest,
+    expectedPrefix: primary.expected.slice(0, PREFIX_LENGTH),
+    matches: hashesMatch(primary.expected, parsed.v1),
+    matchingAlternateId,
+  };
+}
