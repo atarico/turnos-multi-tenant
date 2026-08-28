@@ -38,6 +38,22 @@ describe("HomePage", () => {
     expect(link.querySelector("button")).toBeNull();
   });
 
+  it("renders the nav links as plain anchors, with no nested button", () => {
+    render(<HomePage />);
+
+    const ingresar = screen.getByRole("link", { name: "Ingresar" });
+    expect(ingresar).toHaveAttribute("href", "/ingresar");
+    expect(ingresar.querySelector("button")).toBeNull();
+
+    // The nav signup CTA is the one without the arrow icon; the hero one has it.
+    const navSignup = screen
+      .getAllByRole("link", { name: "Crear mi negocio" })
+      .find((el) => !el.querySelector("svg"));
+    expect(navSignup).toBeDefined();
+    expect(navSignup).toHaveAttribute("href", "/registro");
+    expect(navSignup?.querySelector("button")).toBeNull();
+  });
+
   it("renders the hero signup CTA as a plain anchor, with no nested button", () => {
     render(<HomePage />);
 

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Scissors } from "lucide-react";
 
+import { buttonClasses } from "@/components/ui/button";
 import { listCatalogServices } from "@/modules/catalog/application/queries";
 import {
   deleteStaffAction,
@@ -17,7 +18,7 @@ export const metadata: Metadata = { title: "Profesionales" };
 
 export default async function StaffPage() {
   const tenant = await getCurrentTenant();
-  // Sin negocio no hay equipo: el panel se encarga del onboarding.
+  // Sin negocio no hay equipo: el panel decide a dónde mandarlo.
   if (!tenant) redirect("/panel");
 
   // Las dos consultas son independientes: van en paralelo.
@@ -37,14 +38,23 @@ export default async function StaffPage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <header>
-        <Link
-          href="/panel"
-          className="inline-flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-          Panel
-        </Link>
-        <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/panel"
+            className={buttonClasses({ variant: "secondary", size: "sm" })}
+          >
+            <ArrowLeft className="size-4" />
+            Volver al panel general
+          </Link>
+          <Link
+            href="/panel/servicios"
+            className={buttonClasses({ variant: "ghost", size: "sm" })}
+          >
+            <Scissors className="size-4" />
+            Servicios
+          </Link>
+        </div>
+        <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight">
           Profesionales
         </h1>
         <p className="mt-1 text-sm text-muted">

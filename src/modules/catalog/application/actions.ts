@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
+import { wroteRows } from "@/core/db-write";
 import { createClient } from "@/lib/supabase/server";
 import { deleteBlockMessage } from "@/modules/booking/domain/delete-outcome";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
@@ -66,20 +67,37 @@ export async function saveServiceAction(
   };
 
   const supabase = await createClient();
-  const { error } = id
-    ? await supabase
-        .from("services")
-        .update(values)
-        .eq("id", id)
-        .eq("tenant_id", tenant.id)
-    : await supabase.from("services").insert({ ...values, tenant_id: tenant.id });
 
-  if (error) {
-    return errorState(
-      id
-        ? "No pudimos guardar los cambios. Intentá de nuevo."
-        : "No pudimos crear el servicio. Intentá de nuevo.",
-    );
+  if (id) {
+    /**
+     * El UPDATE pide la fila de vuelta y se cuenta lo que tocó.
+     *
+     * `error: null` no prueba que se escribió: PostgREST devuelve éxito con
+     * conjunto vacío cuando RLS —o un `id` que ya no existe— recorta la
+     * escritura a cero filas. Con dos pestañas abiertas, borrar el servicio en
+     * una y editarlo en la otra respondía "Servicio actualizado." sin tocar
+     * nada. Ver `core/db-write.ts`.
+     */
+    const written = await supabase
+      .from("services")
+      .update(values)
+      .eq("id", id)
+      .eq("tenant_id", tenant.id)
+      .select("id");
+
+    if (!wroteRows(written)) {
+      return errorState("No pudimos guardar los cambios. Intentá de nuevo.");
+    }
+  } else {
+    // El INSERT no necesita el mismo cuidado: RLS sobre un insert SÍ devuelve
+    // error, así que preguntar por el error alcanza.
+    const { error } = await supabase
+      .from("services")
+      .insert({ ...values, tenant_id: tenant.id });
+
+    if (error) {
+      return errorState("No pudimos crear el servicio. Intentá de nuevo.");
+    }
   }
 
   revalidateCatalog(tenant);
@@ -106,13 +124,16 @@ export async function toggleServiceActiveAction(
   const active = String(formData.get("active") ?? "") === "true";
 
   const supabase = await createClient();
-  const { error } = await supabase
+  // Cero filas afectadas es un fallo silencioso, no un éxito: ver
+  // `core/db-write.ts`.
+  const written = await supabase
     .from("services")
     .update({ active })
     .eq("id", id)
-    .eq("tenant_id", tenant.id);
+    .eq("tenant_id", tenant.id)
+    .select("id");
 
-  if (error) {
+  if (!wroteRows(written)) {
     return errorState("No pudimos cambiar el estado del servicio.");
   }
 

@@ -1,0 +1,60 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+
+import { buttonClasses } from "@/components/ui/button";
+import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
+import { getCurrentTenant } from "@/modules/tenants/application/queries";
+import { saveSettingsAction } from "@/modules/tenants/application/settings-actions";
+import { PublicLinkField } from "@/modules/tenants/ui/public-link-field";
+import { SettingsForm } from "@/modules/tenants/ui/settings-form";
+
+export const metadata: Metadata = { title: "Configuración" };
+
+/**
+ * Configuración del negocio. Hoy sólo lo visible —color y logo— pero nace como
+ * ruta propia porque es el lugar natural para lo que venga después (datos del
+ * negocio, zona horaria) y mudarlo más tarde costaría más que abrirlo ahora.
+ */
+export default async function SettingsPage() {
+  const tenant = await getCurrentTenant();
+  // Sin negocio no hay nada que configurar: el panel decide a dónde mandarlo.
+  if (!tenant) redirect("/panel");
+
+  const publicUrl = resolvePublicBookingUrl(tenant.slug);
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-6 py-8">
+      <header>
+        <Link
+          href="/panel"
+          className={buttonClasses({ variant: "secondary", size: "sm" })}
+        >
+          <ArrowLeft className="size-4" />
+          Volver al panel general
+        </Link>
+        <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight">
+          Configuración
+        </h1>
+        <p className="mt-1 text-sm text-muted">
+          Cómo se ve tu negocio para quien entra a reservar.
+        </p>
+        <PublicLinkField url={publicUrl} className="mt-3 max-w-md" />
+      </header>
+
+      {/*
+        `Tenant` sale del join tal cual viene de la base, así que sus campos
+        están en snake_case — a diferencia de `PublicTenant`, que sí pasa por
+        `toPublicTenant`. La UI habla camelCase; la traducción se hace acá.
+      */}
+      <section className="mt-8">
+        <SettingsForm
+          brandColor={tenant.brand_color}
+          logoUrl={tenant.logo_url}
+          save={saveSettingsAction}
+        />
+      </section>
+    </div>
+  );
+}

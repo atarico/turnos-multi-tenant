@@ -54,6 +54,64 @@ describe("ServicesPage", () => {
   );
 
   it(
+    "ofrece copiar el link público desde el catálogo",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      process.env.NEXT_PUBLIC_APP_URL = "https://turnos.app";
+      const { default: ServicesPage } = await import("./page");
+
+      render(await ServicesPage());
+
+      expect(
+        screen.getByRole("button", { name: "Copiar enlace" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  // Cargar servicios y cargar profesionales es la misma sesión de trabajo:
+  // pasar por el panel para cruzar de una a otra es un rodeo.
+  it(
+    "cruza a profesionales sin pasar por el panel",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      const { default: ServicesPage } = await import("./page");
+
+      render(await ServicesPage());
+
+      expect(
+        screen.getByRole("link", { name: "Profesionales" }),
+      ).toHaveAttribute("href", "/panel/profesionales");
+    },
+  );
+
+  it(
+    "vuelve al panel general con un único control, ya no con la flecha suelta",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      const { default: ServicesPage } = await import("./page");
+
+      render(await ServicesPage());
+
+      expect(
+        screen.getByRole("link", { name: "Volver al panel general" }),
+      ).toHaveAttribute("href", "/panel");
+      expect(screen.queryByRole("link", { name: "Panel" })).toBeNull();
+    },
+  );
+
+  it(
     "warns and falls back to localhost when NEXT_PUBLIC_APP_URL is missing",
     { timeout: 15000 },
     async () => {

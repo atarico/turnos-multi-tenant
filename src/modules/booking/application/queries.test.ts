@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getBooking, listUpcomingBookings, sumMonthlyRevenue } from "./queries";
+import {
+  countBookingsOnDay,
+  getBooking,
+  listBookingsToClose,
+  listUpcomingBookings,
+  sumMonthlyRevenue,
+} from "./queries";
 
 /**
  * Tests de la métrica de ingresos.
@@ -31,6 +37,11 @@ const rpc = vi.fn<RpcCall>(async () => ({ data: rows, error: queryError }));
  */
 let fromData: unknown = [];
 let fromError: { message: string } | null = null;
+/**
+ * Lo que devuelve una consulta `head: true`: sin filas, sólo el total que contó
+ * Postgres. `null` es la respuesta real de PostgREST cuando no se pidió conteo.
+ */
+let fromCount: number | null = null;
 
 interface Builder {
   select: ReturnType<typeof vi.fn>;
@@ -41,7 +52,11 @@ interface Builder {
   order: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
   then: (
-    resolve: (v: { data: unknown; error: typeof fromError }) => unknown,
+    resolve: (v: {
+      data: unknown;
+      error: typeof fromError;
+      count: number | null;
+    }) => unknown,
   ) => unknown;
 }
 
@@ -52,7 +67,11 @@ function makeBuilder(): Builder {
   }
   builder.maybeSingle = vi.fn(async () => ({ data: fromData, error: fromError }));
   builder.then = (resolve) =>
-    Promise.resolve({ data: fromData, error: fromError }).then(resolve);
+    Promise.resolve({
+      data: fromData,
+      error: fromError,
+      count: fromCount,
+    }).then(resolve);
   return builder;
 }
 
@@ -65,12 +84,30 @@ vi.mock("@/lib/supabase/server", () => ({
 /** Los argumentos con los que se llamó al RPC. */
 const rpcArgs = () => rpc.mock.calls[0]![1];
 
+/** El builder de la última consulta `.from(...)`. */
+const lastBuilder = () =>
+  from.mock.results[from.mock.results.length - 1]!.value as Builder;
+
 /** La cadena `.select(...)` con la que se armó la última consulta `.from(...)`. */
-const lastSelect = () => {
-  const builder = from.mock.results[from.mock.results.length - 1]!
-    .value as Builder;
-  return builder.select.mock.calls[0]![0] as string;
-};
+const lastSelect = () => lastBuilder().select.mock.calls[0]![0] as string;
+
+/** Las opciones de `.select(cols, opciones)` — ahí viaja el `count`/`head`. */
+const lastSelectOptions = () =>
+  lastBuilder().select.mock.calls[0]![1] as
+    | { count?: string; head?: boolean }
+    | undefined;
+
+/** El primer argumento con que se llamó a un filtro de la última consulta. */
+const filterArg = (method: "eq" | "in" | "gte" | "lt", index = 0) =>
+  lastBuilder()[method].mock.calls[index]?.[1] as unknown;
+
+/**
+ * La COLUMNA sobre la que se aplicó un filtro de la última consulta. Separada de
+ * `filterArg` porque en las listas de la agenda lo que importa no es el instante
+ * (que es `now()` y cambia en cada corrida) sino sobre qué columna se corta.
+ */
+const filterColumn = (method: "eq" | "in" | "gte" | "lt", index = 0) =>
+  lastBuilder()[method].mock.calls[index]?.[0] as string | undefined;
 
 beforeEach(() => {
   rows = [];
@@ -78,6 +115,7 @@ beforeEach(() => {
   rpc.mockClear();
   fromData = [];
   fromError = null;
+  fromCount = null;
   from.mockClear();
 });
 
@@ -165,6 +203,105 @@ describe("sumMonthlyRevenue", () => {
 });
 
 /**
+ * Tests del contador "Turnos hoy".
+ *
+ * La métrica responde "cuánto trabajo tiene el día", no "cuánto queda por
+ * delante": por eso la ventana es el día civil COMPLETO del negocio y no
+ * arranca en `now()`. Antes el panel filtraba la lista de próximos turnos, que
+ * corta en `starts_at >= now()`: a las 23:00 los dos turnos de las 23:00 ya
+ * habían arrancado, se habían mudado a "turnos a cerrar" y el contador decía 0.
+ *
+ * Igual que en ingresos, el conteo lo hace la BASE: contar filas traídas se
+ * rompe contra el `max_rows` de PostgREST (1000) sin devolver error.
+ */
+describe("countBookingsOnDay", () => {
+  it("delegates the count to the database instead of fetching rows", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(lastSelectOptions()).toMatchObject({ count: "exact", head: true });
+  });
+
+  it("returns the count the database reported", async () => {
+    fromCount = 7;
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toBe(7);
+  });
+
+  it("scopes the query to the tenant", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("eq")).toBe("tenant-1");
+  });
+
+  // El defecto original: un turno de las 23:00 visto a las 23:00 ya arrancó y
+  // ya terminó. Sigue siendo trabajo de hoy, así que sigue contando — la cota
+  // baja es la medianoche del negocio, nunca `now()`.
+  it("counts a booking that already started and ended earlier today", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("gte")).toBe("2026-09-15T03:00:00.000Z");
+  });
+
+  // Y la cota alta es exclusiva: el turno de mañana a las 00:00 es de mañana.
+  it("stops at the start of the next civil day, exclusive", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(filterArg("lt")).toBe("2026-09-16T03:00:00.000Z");
+  });
+
+  // El día lo decide la timezone del NEGOCIO, no la del servidor: el mismo
+  // "2026-09-15" empieza y termina en otro instante en Santiago que en Buenos
+  // Aires, y el contador tiene que moverse con el negocio.
+  it("lets the tenant's timezone decide the day boundary", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", "Pacific/Auckland");
+
+    expect(filterArg("gte")).toBe("2026-09-14T12:00:00.000Z");
+    expect(filterArg("lt")).toBe("2026-09-15T12:00:00.000Z");
+  });
+
+  // 'completed' cuenta: el turno pasó, el trabajo lo tuvo el día igual.
+  // 'cancelled'/'no_show' no: son trabajo que el día NO tuvo.
+  it("counts completed bookings but not cancelled or no-show ones", async () => {
+    await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    const statuses = filterArg("in") as string[];
+    expect(statuses).toContain("completed");
+    expect(statuses).toContain("pending");
+    expect(statuses).toContain("confirmed");
+    expect(statuses).not.toContain("cancelled");
+    expect(statuses).not.toContain("no_show");
+  });
+
+  it("fails without touching the database when the day is malformed", async () => {
+    const result = await countBookingsOnDay("tenant-1", "2026-02-30", AR);
+
+    expect(result.ok).toBe(false);
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("fails when the query errors", async () => {
+    fromError = { message: "boom" };
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(result.ok).toBe(false);
+  });
+
+  // Sin conteo no hay número: un 0 inventado es un dato falso, y el panel
+  // prefiere admitir que no pudo leer.
+  it("fails when the database reports no count at all", async () => {
+    fromCount = null;
+
+    const result = await countBookingsOnDay("tenant-1", "2026-09-15", AR);
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+/**
  * Mapeo de nombre de servicio/profesional en la agenda.
  *
  * `service_name`/`staff_name` son una foto congelada en el turno (igual que
@@ -203,6 +340,105 @@ describe("listUpcomingBookings", () => {
     expect(select).toContain("staff_name");
     expect(select).not.toContain("services(");
     expect(select).not.toContain("staff(");
+  });
+
+  // El turno que está pasando AHORA MISMO ya empezó, así que un corte en
+  // `starts_at >= now()` lo dejaba afuera — y `listBookingsToClose` tampoco lo
+  // levantaba, porque ésa arranca recién en `ends_at < now()`. El dueño estaba
+  // atendiendo a alguien que su propio panel decía que no existía.
+  //
+  // El corte va sobre `ends_at`: un turno pertenece a la agenda mientras no
+  // haya TERMINADO, no mientras no haya empezado.
+  it("keeps a booking that already started but has not ended yet", async () => {
+    await listUpcomingBookings("tenant-1");
+
+    expect(filterColumn("gte")).toBe("ends_at");
+  });
+});
+
+describe("listBookingsToClose", () => {
+  it("asks only for bookings that already ended", async () => {
+    await listBookingsToClose("tenant-1");
+
+    expect(filterColumn("lt")).toBe("ends_at");
+  });
+
+  it("scopes the query to the tenant", async () => {
+    await listBookingsToClose("tenant-1");
+
+    expect(filterArg("eq")).toBe("tenant-1");
+  });
+
+  it("maps the returned rows onto the agenda shape", async () => {
+    fromData = [
+      {
+        id: "b1",
+        customer_name: "Ana",
+        customer_phone: null,
+        starts_at: "2026-09-01T10:00:00Z",
+        ends_at: "2026-09-01T10:30:00Z",
+        status: "confirmed",
+        service_name: "Corte",
+        staff_name: "Juan",
+      },
+    ];
+
+    const result = await listBookingsToClose("tenant-1");
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value).toHaveLength(1);
+    expect(result.ok && result.value[0]?.customerName).toBe("Ana");
+    expect(result.ok && result.value[0]?.serviceName).toBe("Corte");
+    expect(result.ok && result.value[0]?.endsAt).toBe("2026-09-01T10:30:00Z");
+  });
+
+  it("surfaces a domain error instead of throwing when the query fails", async () => {
+    fromError = { message: "boom" };
+
+    const result = await listBookingsToClose("tenant-1");
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+/**
+ * Las dos listas del panel son UNA agenda partida en dos, no dos consultas
+ * sueltas. Para que sea una partición de verdad hacen falta DOS cosas, y las dos
+ * se comprueban acá:
+ *
+ * 1. Que corten por la MISMA columna con operadores complementarios (`>=` y
+ *    `<`). Mover uno de los dos a otra columna reabre el hueco por el que se
+ *    caía el turno en curso.
+ * 2. Que corten en el MISMO instante. Con dos lecturas de reloj independientes
+ *    hay una ventana —chica, pero real— en la que un turno que termina entre
+ *    `t1` y `t2` cumple `ends_at >= t1` Y `ends_at < t2` a la vez, y sale
+ *    duplicado en las dos listas. Por eso el instante se recibe, no se lee.
+ */
+describe("la agenda del panel y la lista de cierre parten los turnos vivos", () => {
+  it("cuts both lists on the same column at the same instant", async () => {
+    const at = new Date("2026-09-01T12:00:00.000Z");
+
+    await listUpcomingBookings("tenant-1", at);
+    const upcoming = { column: filterColumn("gte"), instant: filterArg("gte") };
+
+    await listBookingsToClose("tenant-1", at);
+    const toClose = { column: filterColumn("lt"), instant: filterArg("lt") };
+
+    expect(upcoming.column).toBe(toClose.column);
+    expect(upcoming.instant).toBe(at.toISOString());
+    expect(toClose.instant).toBe(at.toISOString());
+  });
+
+  // El default tiene que seguir siendo "ahora": un llamador que no sabe nada de
+  // esto no puede quedarse sin corte.
+  it("falls back to the current instant when the caller passes none", async () => {
+    const before = new Date().toISOString();
+    await listUpcomingBookings("tenant-1");
+    const after = new Date().toISOString();
+
+    const used = filterArg("gte") as string;
+    expect(used >= before).toBe(true);
+    expect(used <= after).toBe(true);
   });
 });
 

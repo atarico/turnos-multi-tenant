@@ -48,6 +48,48 @@ export async function listStaffMembers(
 }
 
 /**
+ * Cuántos profesionales ACTIVOS tiene el negocio.
+ *
+ * El conteo lo hace Postgres (`count: "exact"` con `head: true`, o sea sin
+ * traer una sola fila). Contar en la app trayendo las filas es el error que
+ * PostgREST castiga cortando en 1000 sin avisar: el cupo daría bien para
+ * siempre a partir de ahí.
+ *
+ * Mira SÓLO los activos a propósito. Pausar a alguien libera su lugar en el
+ * plan, y esa es la salida self-service del negocio que bajó de plan y quedó
+ * por encima del cupo: sin ella, la única forma de volver a agregar sería
+ * borrar gente. Ver `billing/domain/plan.ts`.
+ *
+ * `excludeStaffId` sirve para preguntar "¿entra ESTE?" sin contarlo a él. Al
+ * reactivar a alguien que ya estaba activo, contarlo daría "límite alcanzado"
+ * sobre una operación que no cambia nada.
+ */
+export async function countActiveStaff(
+  tenantId: string,
+  excludeStaffId?: string,
+): Promise<Result<number>> {
+  const supabase = await createClient();
+  const query = supabase
+    .from("staff")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("active", true);
+
+  const { count, error } = await (excludeStaffId
+    ? query.neq("id", excludeStaffId)
+    : query);
+
+  // `count` en null es "no sabemos", no "cero": tratarlo como cero dejaría
+  // pasar altas por encima del cupo justo cuando la consulta falló raro.
+  if (error || count === null) {
+    return err(
+      appError("staff_count_failed", "No pudimos verificar el cupo de tu plan."),
+    );
+  }
+  return ok(count);
+}
+
+/**
  * Un profesional puntual del negocio.
  *
  * El filtro por `tenant_id` es el guard de aislamiento: un `staffId` que venga

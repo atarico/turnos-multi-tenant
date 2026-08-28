@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -9,6 +10,7 @@ import {
   LogOut,
   Plus,
   Scissors,
+  Settings,
   Users,
   Wallet,
 } from "lucide-react";
@@ -16,32 +18,30 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { signOutAction } from "@/modules/auth/application/actions";
+import { getCurrentSubscription } from "@/modules/billing/application/queries";
+import { isInTrial, trialDaysLeft } from "@/modules/billing/domain/subscription";
 import {
+  countBookingsOnDay,
   listBookingsToClose,
   listUpcomingBookings,
   sumMonthlyRevenue,
 } from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { formatPrice } from "@/modules/catalog/domain/money";
+import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
-import { displayBookingUrl, publicBookingUrl } from "@/modules/tenants/domain/public-url";
-import { OnboardingForm } from "@/modules/tenants/ui/onboarding-form";
 import { PublicLinkDialog } from "@/modules/tenants/ui/public-link-dialog";
-
-/** Instante ISO → "YYYY-MM-DD" civil en la tz del negocio. */
-function civilDay(iso: string | number, timezone: string): string {
-  return format(new TZDate(new Date(iso).getTime(), timezone), "yyyy-MM-dd");
-}
+import { PublicLinkField } from "@/modules/tenants/ui/public-link-field";
 
 /**
- * "Hoy" civil en la tz del negocio. Aislado en su propia función porque leer
- * el reloj es request-time: legítimo en un Server Component (render dinámico),
- * pero no debe vivir en el cuerpo "puro" del componente.
+ * "Hoy" civil en la tz del negocio, "YYYY-MM-DD". Aislado en su propia función
+ * porque leer el reloj es request-time: legítimo en un Server Component (render
+ * dinámico), pero no debe vivir en el cuerpo "puro" del componente.
  */
 function todayInTz(timezone: string): string {
-  return civilDay(Date.now(), timezone);
+  return format(new TZDate(Date.now(), timezone), "yyyy-MM-dd");
 }
 
 /** Mes civil en curso en la tz del negocio, "YYYY-MM". Request-time, igual que `todayInTz`. */
@@ -66,29 +66,36 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   const tenant = await getCurrentTenant();
 
   // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
-  if (!tenant) {
-    return (
-      <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">
-          Creá tu negocio
-        </h1>
-        <p className="mt-2 text-sm text-muted">Un último paso para arrancar.</p>
-        <div className="mt-6">
-          <OnboardingForm />
-        </div>
-      </div>
-    );
-  }
+  if (!tenant) redirect("/panel/bienvenida");
 
-  const [bookingsResult, toCloseResult, revenueResult] = await Promise.all([
-    listUpcomingBookings(tenant.id),
-    listBookingsToClose(tenant.id),
+  // Un solo reloj para las dos listas: son una agenda partida en dos por este
+  // instante. Si cada consulta leyera el suyo, un turno que termina entre las
+  // dos lecturas cumpliría los dos filtros y se pintaría duplicado.
+  const now = new Date();
+  const [
+    bookingsResult,
+    toCloseResult,
+    todayCountResult,
+    revenueResult,
+    subscription,
+  ] = await Promise.all([
+    listUpcomingBookings(tenant.id, now),
+    listBookingsToClose(tenant.id, now),
+    countBookingsOnDay(tenant.id, todayInTz(tenant.timezone), tenant.timezone),
     sumMonthlyRevenue(
       tenant.id,
       currentMonthInTz(tenant.timezone),
       tenant.timezone,
     ),
+    getCurrentSubscription(tenant.id),
   ]);
+
+  // Mismo `now` que la agenda: el cartel de prueba y las listas tienen que
+  // estar mirando el mismo instante.
+  const trialDays =
+    subscription && isInTrial(subscription, now)
+      ? trialDaysLeft(subscription, now)
+      : 0;
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
@@ -98,21 +105,13 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     ? formatPrice(revenueResult.value.totalCents, revenueResult.value.currency)
     : "—";
 
-  // Literal member access (not `serverEnv()`): panel pages don't otherwise
-  // depend on the service-role env surface, and this keeps them free of it.
-  const configuredOrigin = process.env.NEXT_PUBLIC_APP_URL;
-  if (!configuredOrigin) {
-    console.warn(
-      "NEXT_PUBLIC_APP_URL is not set; public booking links fall back to http://localhost:3000",
-    );
-  }
-  const origin = configuredOrigin || "http://localhost:3000";
-  const publicUrl = publicBookingUrl(origin, tenant.slug);
+  // Mismo criterio que con los ingresos: el conteo lo hace la base, y si no
+  // vuelve, "—". Decir "0 turnos hoy" cuando la consulta falló le miente al
+  // dueño sobre su propio día.
+  const turnosHoy = todayCountResult.ok ? String(todayCountResult.value) : "—";
 
-  const todayStr = todayInTz(tenant.timezone);
-  const turnosHoy = bookings.filter(
-    (b) => civilDay(b.startsAt, tenant.timezone) === todayStr,
-  ).length;
+  const publicUrl = resolvePublicBookingUrl(tenant.slug);
+
   const proximoTurno = bookings[0]
     ? format(
         new TZDate(new Date(bookings[0].startsAt).getTime(), tenant.timezone),
@@ -125,25 +124,34 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <PublicLinkDialog url={publicUrl} triggered={bienvenida === "1"} />
       <header className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-3">
             <h1 className="font-display text-2xl font-semibold tracking-tight">
               {tenant.name}
             </h1>
-            <Badge variant="gold">{PLAN_LABELS[tenant.plan]}</Badge>
+            {/* El plan lleva a su pantalla. Es el único lugar del panel donde
+                el dueño ya está mirando su plan, así que es donde va a buscar
+                cómo cambiarlo — meterlo en la barra de links de arriba lo
+                escondería entre Servicios y Configuración. */}
+            <Link href="/panel/suscripcion" aria-label="Ver tu suscripción">
+              <Badge
+                variant="gold"
+                className="transition-colors hover:bg-gold/20"
+              >
+                {PLAN_LABELS[tenant.plan]}
+              </Badge>
+            </Link>
+            {trialDays > 0 && (
+              <span className="text-sm text-muted">
+                Prueba · {trialDays} {trialDays === 1 ? "día" : "días"}
+              </span>
+            )}
+            <span className="text-sm text-muted">
+              {COUNTRY_LABELS[tenant.country]}
+            </span>
           </div>
-          <p className="mt-1 text-sm text-muted">
-            <span className="text-faint">URL para clientes:</span>{" "}
-            <a
-              href={publicUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline decoration-border-strong underline-offset-2 transition-colors hover:text-foreground"
-            >
-              {displayBookingUrl(publicUrl)}
-            </a>{" "}
-            · {COUNTRY_LABELS[tenant.country]}
-          </p>
+          <p className="mt-3 text-sm text-faint">URL para clientes</p>
+          <PublicLinkField url={publicUrl} className="mt-1.5 max-w-md" />
         </div>
         <div className="flex items-center gap-4">
           <Link
@@ -159,6 +167,13 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
           >
             <Users className="size-4" />
             Profesionales
+          </Link>
+          <Link
+            href="/panel/configuracion"
+            className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
+          >
+            <Settings className="size-4" />
+            Configuración
           </Link>
           <Link
             href="/panel/nueva-reserva"
@@ -180,7 +195,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
         <MetricCard
           icon={<CalendarDays className="size-5" />}
           label="Turnos hoy"
-          value={String(turnosHoy)}
+          value={turnosHoy}
         />
         <MetricCard
           icon={<Wallet className="size-5" />}

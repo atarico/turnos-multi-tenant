@@ -125,4 +125,90 @@ describe("ScheduleEditor", () => {
 
     expect(await screen.findByText("Horario guardado.")).toBeInTheDocument();
   });
+
+  /**
+   * Después de guardar, React 19 resetea el form y `revalidatePath` vuelve a
+   * renderizar la página con lo que quedó en la base. El `rerender` con las
+   * franjas guardadas es esa segunda pasada: lo que se ve tiene que ser lo
+   * que se guardó, no el horario con el que se abrió la pantalla.
+   */
+  describe("after a successful save", () => {
+    const savedSave = () =>
+      spySave({ status: "success", message: "Horario guardado." });
+
+    it("keeps the edited times on screen", async () => {
+      const save = savedSave();
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <ScheduleEditor staffId="st1" windows={[monday]} save={save} />,
+      );
+
+      await user.clear(dayBlock("Lunes").getByLabelText("Desde"));
+      await user.type(dayBlock("Lunes").getByLabelText("Desde"), "10:00");
+      await user.clear(dayBlock("Lunes").getByLabelText("Hasta"));
+      await user.type(dayBlock("Lunes").getByLabelText("Hasta"), "14:00");
+      await user.click(screen.getByRole("button", { name: "Guardar horario" }));
+
+      rerender(
+        <ScheduleEditor
+          staffId="st1"
+          windows={[{ weekday: 1, startTime: "10:00", endTime: "14:00" }]}
+          save={save}
+        />,
+      );
+
+      expect(dayBlock("Lunes").getByLabelText("Desde")).toHaveValue("10:00");
+      expect(dayBlock("Lunes").getByLabelText("Hasta")).toHaveValue("14:00");
+    });
+
+    it("keeps the times typed into a window added with the button", async () => {
+      const save = savedSave();
+      const user = userEvent.setup();
+      const added: ScheduleWindow = {
+        weekday: 3,
+        startTime: "15:00",
+        endTime: "19:00",
+      };
+      const { rerender } = render(
+        <ScheduleEditor staffId="st1" windows={[]} save={save} />,
+      );
+
+      await user.click(
+        screen.getByRole("button", { name: "Agregar franja el Miércoles" }),
+      );
+      await user.clear(dayBlock("Miércoles").getByLabelText("Desde"));
+      await user.type(
+        dayBlock("Miércoles").getByLabelText("Desde"),
+        added.startTime,
+      );
+      await user.clear(dayBlock("Miércoles").getByLabelText("Hasta"));
+      await user.type(
+        dayBlock("Miércoles").getByLabelText("Hasta"),
+        added.endTime,
+      );
+      await user.click(screen.getByRole("button", { name: "Guardar horario" }));
+
+      rerender(<ScheduleEditor staffId="st1" windows={[added]} save={save} />);
+
+      expect(dayBlock("Miércoles").getByLabelText("Desde")).toHaveValue("15:00");
+      expect(dayBlock("Miércoles").getByLabelText("Hasta")).toHaveValue("19:00");
+    });
+
+    it("does not bring back a removed window", async () => {
+      const save = savedSave();
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <ScheduleEditor staffId="st1" windows={[monday]} save={save} />,
+      );
+
+      await user.click(
+        dayBlock("Lunes").getByRole("button", { name: "Quitar franja" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Guardar horario" }));
+
+      rerender(<ScheduleEditor staffId="st1" windows={[]} save={save} />);
+
+      expect(dayBlock("Lunes").getByText("Cerrado")).toBeInTheDocument();
+    });
+  });
 });

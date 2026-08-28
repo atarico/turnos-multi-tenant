@@ -56,7 +56,8 @@ export async function createBusinessAction(
   }
 
   revalidatePath("/panel");
-  // Arrastra el disparador: el panel ya consumió `?bienvenida=1` mostrando este
-  // onboarding, así que sin reponerlo el modal recién aparecería al segundo login.
+  // Repone el disparador del modal: el rebote a `/panel/bienvenida` se comió el
+  // `?bienvenida=1` que traían el alta y el login, y sin reponerlo acá el modal
+  // recién aparecería al segundo login.
   redirect("/panel?bienvenida=1");
 }

@@ -21,10 +21,19 @@ vi.mock("next/cache", () => ({
   revalidatePath: (path: string) => revalidatePath(path),
 }));
 
-/** Builder encadenable `.update().eq().eq()` que resuelve a { error }. */
+/**
+ * Builder encadenable `.update().eq().eq().select()`.
+ *
+ * El `.select()` no es adorno: sin él PostgREST responde 204 sin cuerpo y no
+ * hay forma de saber cuántas filas tocó. Por eso el doble modela las FILAS
+ * devueltas además del error — un UPDATE recortado a cero filas vuelve con
+ * `error: null` y hay que poder distinguirlo.
+ */
 let updateError: { message: string } | null = null;
+let updatedRows: Array<{ id: string }> = [{ id: "b1" }];
 const updateEq = vi.fn();
 const update = vi.fn();
+const select = vi.fn();
 
 function buildQuery() {
   const builder: Record<string, unknown> = {};
@@ -32,8 +41,12 @@ function buildQuery() {
     updateEq(...args);
     return builder;
   };
-  builder.then = (resolve: (r: { error: unknown }) => unknown) =>
-    Promise.resolve(resolve({ error: updateError }));
+  builder.select = (...args: unknown[]) => {
+    select(...args);
+    return builder;
+  };
+  builder.then = (resolve: (r: { data: unknown; error: unknown }) => unknown) =>
+    Promise.resolve(resolve({ data: updatedRows, error: updateError }));
   return builder;
 }
 
@@ -57,17 +70,33 @@ vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: () => getCurrentTenant(),
 }));
 
+const HOUR = 3_600_000;
+/** Instante relativo al reloj real: los fixtures no caducan con el calendario. */
+const fromNow = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+
+/**
+ * El turno base YA TERMINÓ. Cerrarlo (completado / no asistió) sólo es válido
+ * sobre un turno pasado, así que ese es el caso por defecto; el futuro se pide
+ * explícito con `upcoming`.
+ */
 const booking = {
   id: "booking-1",
   customerName: "Ana",
   customerPhone: null,
   serviceName: "Corte",
   staffName: "Vale",
-  startsAt: "2026-09-01T13:00:00.000Z",
-  endsAt: "2026-09-01T14:00:00.000Z",
+  startsAt: fromNow(-2 * HOUR),
+  endsAt: fromNow(-HOUR),
   status: "confirmed" as const,
   serviceId: "service-1",
   staffId: "staff-1",
+};
+
+/** El mismo turno, todavía por delante. */
+const upcoming = {
+  ...booking,
+  startsAt: fromNow(HOUR),
+  endsAt: fromNow(2 * HOUR),
 };
 
 const getBooking = vi.fn(async (): Promise<unknown> => ok(booking));
@@ -91,6 +120,7 @@ function rescheduleForm(fields: Record<string, string>): FormData {
 beforeEach(() => {
   vi.clearAllMocks();
   updateError = null;
+  updatedRows = [{ id: "b1" }];
   rpc.mockResolvedValue({ error: null });
   getBooking.mockResolvedValue(ok(booking));
   getCurrentTenant.mockResolvedValue({ id: "tenant-1", slug: "negocio" });
@@ -126,6 +156,59 @@ describe("updateBookingStatusAction", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  // El agujero que motivó estos tests: un turno del 20 se marcó completado hoy.
+  // Un 'completed' suma a los ingresos del mes y bloquea para siempre el
+  // borrado del servicio y del profesional, así que no alcanza con esconder el
+  // botón: el POST armado a mano tiene que rebotar acá.
+  it.each(["completed", "no_show"])(
+    "no marca como %s un turno que todavía no terminó, sin tocar la base",
+    async (status) => {
+      getBooking.mockResolvedValue(ok(upcoming));
+
+      const result = await updateBookingStatusAction(idleState, statusForm(status));
+
+      expect(result.status).toBe("error");
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cierra un turno apenas pasa su hora de fin", async () => {
+    getBooking.mockResolvedValue(ok({ ...booking, endsAt: fromNow(0) }));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("completed"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "completed" });
+  });
+
+  // Cancelar un turno futuro es el caso NORMAL: el cliente avisa que no viene.
+  it("sí deja cancelar un turno que todavía no ocurrió", async () => {
+    getBooking.mockResolvedValue(ok(upcoming));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("cancelled"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
+  it("sí deja confirmar un turno que todavía no ocurrió", async () => {
+    getBooking.mockResolvedValue(ok({ ...upcoming, status: "pending" }));
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("confirmed"),
+    );
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "confirmed" });
+  });
+
   it("rechaza un estado que no existe en el enum, sin tocar la base", async () => {
     const result = await updateBookingStatusAction(
       idleState,
@@ -148,6 +231,30 @@ describe("updateBookingStatusAction", () => {
 
     expect(result.status).toBe("error");
     expect(update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El fallo silencioso: PostgREST devuelve `error: null` con conjunto vacío
+   * cuando RLS recorta el UPDATE a cero filas, o cuando el turno se borró entre
+   * la lectura de unas líneas antes y esta escritura. Sin contar las filas, la
+   * pantalla anunciaba "turno completado" sobre una fila que ya no existe.
+   */
+  it("no dice que cambió el estado si no se tocó ninguna fila", async () => {
+    updatedRows = [];
+
+    const result = await updateBookingStatusAction(
+      idleState,
+      statusForm("completed"),
+    );
+
+    expect(result.status).toBe("error");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("pide la fila de vuelta para poder contar lo que escribió", async () => {
+    await updateBookingStatusAction(idleState, statusForm("completed"));
+
+    expect(select).toHaveBeenCalled();
   });
 
   it("si el UPDATE falla devuelve error y NO revalida nada", async () => {

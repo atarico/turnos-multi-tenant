@@ -72,10 +72,15 @@
      covers checkbox/radio labels that wrap their input instead of using
      `for`/`htmlFor` (e.g. staff-form.tsx's service picker) — without it,
      removing a local `cursor-pointer` patch on those labels would silently
-     regress them. `:not(:disabled)` / `:not([aria-disabled="true"])` keep
-     disabled controls on the default cursor; `cursor-not-allowed` utilities
-     still win via `@layer utilities` > `@layer base`. */
+     regress them. The checkbox/radio inputs need their own rule even with
+     those labels covered: the cursor is per-element, so without it it flips
+     back to the default the moment the pointer crosses onto the box itself.
+     `:not(:disabled)` / `:not([aria-disabled="true"])` keep disabled controls
+     on the default cursor; `cursor-not-allowed` utilities still win via
+     `@layer utilities` > `@layer base`. */
   button:not(:disabled),
+  select:not(:disabled),
+  input:is([type="checkbox"], [type="radio"]):not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
   summary,
   label[for],

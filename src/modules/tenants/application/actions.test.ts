@@ -7,8 +7,8 @@ import { createBusinessAction } from "./actions";
 /**
  * Tests de `createBusinessAction`: el onboarding crea el negocio vía la función
  * Postgres `create_business` y vuelve al panel. El redirect tiene que arrastrar
- * `?bienvenida=1`, porque el panel consumió ese parámetro mientras el usuario
- * todavía no tenía negocio y el modal de bienvenida nunca llegó a mostrarse.
+ * `?bienvenida=1`, porque el usuario sin negocio venía rebotado a
+ * `/panel/bienvenida` y ese rebote perdió el parámetro que traía el alta.
  */
 
 const revalidatePath = vi.fn();
@@ -21,9 +21,15 @@ vi.mock("next/navigation", () => ({
   redirect: (path: string) => redirect(path),
 }));
 
+/**
+ * `createBusinessAction` sólo habla por RPC: el alta del negocio y su membresía
+ * de dueño ocurren dentro de `create_business()`, en una transacción. Por eso
+ * el doble del cliente no necesita `from` ni nada de la tabla.
+ */
 const rpc = vi.fn(async () => ({
   error: null as { message: string } | null,
 }));
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ rpc }),
 }));

@@ -1,8 +1,10 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
+import { Users } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { type ActionState, idleState } from "@/core/action";
@@ -42,6 +44,30 @@ export function ServiceForm({ service, save, onCancel }: ServiceFormProps) {
           <p className="rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">
             {state.message}
           </p>
+        )}
+
+        {/* Guardar un servicio deja al negocio a mitad de camino: hasta que no
+            haya un profesional que lo preste, la página pública no ofrece un
+            solo turno. Por eso el próximo paso se ofrece acá y no en el panel. */}
+        {state.status === "success" && (
+          <div className="rounded-xl border border-gold/30 bg-gold/10 px-3.5 py-3">
+            <p className="text-sm text-foreground">{state.message}</p>
+            <p className="mt-1 text-sm text-muted">
+              Ahora sumá a quién lo presta: sin profesionales, nadie puede
+              reservarlo.
+            </p>
+            <Link
+              href="/panel/profesionales"
+              className={buttonClasses({
+                variant: "outline",
+                size: "sm",
+                className: "mt-3",
+              })}
+            >
+              <Users className="size-4" />
+              Agregar un profesional
+            </Link>
+          </div>
         )}
 
         <div>

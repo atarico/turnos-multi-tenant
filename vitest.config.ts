@@ -16,6 +16,20 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      /**
+       * `server-only` resuelve, fuera del bundler de Next, al archivo que tira
+       * "This module cannot be imported from a Client Component". Un test de
+       * Node no es un Client Component, pero el paquete no puede saberlo.
+       *
+       * Sin este alias la única forma de testear un módulo con secretos sería
+       * sacarle el `import "server-only"` — o sea, cambiar el código de
+       * producción para que el test pase, y perder de paso el guard que rompe
+       * el build si alguien lo importa desde el cliente. Se apunta a un módulo
+       * vacío: el guard sigue vivo donde importa, que es el build.
+       */
+      "server-only": fileURLToPath(
+        new URL("./src/test-support/server-only-stub.ts", import.meta.url),
+      ),
     },
   },
   test: {
