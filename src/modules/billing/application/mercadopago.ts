@@ -186,6 +186,36 @@ export async function createPreapproval(
   }
 
   if (!response.ok) {
+    // TEMPORAL — DIAGNÓSTICO DE PRODUCCIÓN. BORRAR CUANDO EL CHECKOUT ANDE.
+    //
+    // Todo dentro del `try`: los dobles de los tests sólo implementan `json()`,
+    // y un diagnóstico que rompe la suite no es un diagnóstico.
+    //
+    // La HUELLA del token, no el token: prefijo y largo alcanzan para comparar
+    // contra el valor que ya probamos por fuera, y con eso no se reconstruye
+    // nada. Es el dato que faltaba — la request se replicó byte a byte desde
+    // afuera y devuelve 201, así que lo único que no se pudo mirar hasta ahora
+    // es qué valor tiene cargado el entorno.
+    try {
+      const token = serverEnv().MERCADOPAGO_ACCESS_TOKEN;
+      console.warn(
+        "[mp-preapproval] rechazo",
+        JSON.stringify({
+          status: response.status,
+          tokenPrefijo: token.slice(0, 13),
+          tokenLargo: token.length,
+          tokenConEspacios: token !== token.trim(),
+          payerEmail: draft.payerEmail,
+          montoPesos: amountArsCents / CENTS,
+          backUrl: draft.backUrl,
+          reason: draft.reason,
+          body: (await response.text()).slice(0, 600),
+        }),
+      );
+    } catch {
+      console.warn("[mp-preapproval] rechazo sin detalle", response.status);
+    }
+
     return response.status >= 500 ? unreachable() : rejected();
   }
 
