@@ -62,6 +62,39 @@ describe("applyWebhookNotification", () => {
     expect(args.p_status).toBe("active");
   });
 
+  it("le manda el TIPO de aviso, que es lo que decide si rota el período", async () => {
+    // Un mismo pago llega dos veces: como `preapproval.authorized` y como
+    // `authorized_payment.processed`. Los dos son `active` y los dos tienen
+    // clave de idempotencia distinta, así que el freno de `billing_events` no
+    // los junta. Sin este dato la base rotaba el período con los dos y la cuota
+    // del mes se reiniciaba de más.
+    await applyWebhookNotification(notification);
+
+    const cobro = rpc.mock.calls[0]![1] as Record<string, unknown>;
+    expect(cobro.p_kind).toBe("authorized_payment");
+
+    rpc.mockClear();
+    fetchEvent.mockResolvedValue({
+      ok: true,
+      value: {
+        providerSubscriptionId: "MP-PREAPPROVAL-1",
+        providerStatus: "authorized",
+      },
+    });
+
+    await applyWebhookNotification({
+      type: "subscription_preapproval",
+      action: "updated",
+      data: { id: "MP-PREAPPROVAL-1" },
+    });
+
+    const autorizacion = rpc.mock.calls[0]![1] as Record<string, unknown>;
+    expect(autorizacion.p_kind).toBe("preapproval");
+    // El estado sigue siendo `active` en los dos: la diferencia NO está acá,
+    // está en el tipo. Por eso el tipo tiene que viajar.
+    expect(autorizacion.p_status).toBe("active");
+  });
+
   it("NO le cree al cuerpo de la notificación: le pregunta a Mercado Pago", async () => {
     // Es lo único que impide que quien adivine un id de recurso active una
     // suscripción diciendo que está paga. El estado sale SIEMPRE del llamado.

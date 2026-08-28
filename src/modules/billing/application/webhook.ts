@@ -122,6 +122,12 @@ export async function applyWebhookNotification(
         resource.value.providerStatus,
       ),
       p_provider_subscription_id: resource.value.providerSubscriptionId,
+      // De qué habla el aviso, sin el estado pegado. Es lo que decide si este
+      // evento rota el período: sólo un cobro compra un mes, y un mismo pago
+      // llega como `preapproval.authorized` Y como `authorized_payment.processed`.
+      // Sin esta distinción los dos rotaban y la cuota del mes se reiniciaba
+      // dos veces.
+      p_kind: event.kind,
       p_event_type: `${event.kind}.${resource.value.providerStatus}`,
       p_status: status,
     });

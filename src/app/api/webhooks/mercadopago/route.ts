@@ -35,6 +35,19 @@ export const runtime = "nodejs";
  * `mp_bad_response` es contrato roto: contestaron 2xx con algo inservible. Eso
  * lo arregla una persona mirando el log, no quince minutos de espera repetidos
  * indefinidamente.
+ *
+ * `mp_rejected` NO ESTÁ ACÁ, y no es un olvido. `mercadopago.ts` dice —con
+ * razón— que reintentar esa request devuelve lo mismo para siempre, y eso
+ * podría leerse como que acá corresponde un 200. No corresponde: los dos lados
+ * de esta decisión no cuestan lo mismo.
+ *
+ * El caso concreto es el token vencido. El webhook empieza a contestar 4xx.
+ * Con 5xx, Mercado Pago sigue reintentando y el día que alguien renueva el
+ * token los cobros entran solos, sin perder ninguno. Con 200, cada cobro que
+ * llegó mientras estaba roto se tira a la basura en silencio.
+ *
+ * O sea: reintentar de más cuesta invocaciones; reintentar de menos cuesta
+ * plata de un cliente que pagó. Por eso el default es reintentar.
  */
 const NOT_RETRYABLE = new Set(["mp_bad_response"]);
 
@@ -86,7 +99,23 @@ export async function POST(request: Request): Promise<Response> {
 
     if (applied.ok) return respond(200);
 
-    return respond(NOT_RETRYABLE.has(applied.error.code) ? 200 : 500);
+    const retryable = !NOT_RETRYABLE.has(applied.error.code);
+
+    // La única señal de que algo se rompió. Sin esto, un webhook que falla
+    // reintenta cada quince minutos y NO QUEDA REGISTRO DE NADA: el 5xx protege
+    // el cobro pero no le avisa a nadie, así que la falla es "ruidosa" sólo del
+    // lado de Mercado Pago y silenciosa del nuestro. Un token vencido puede
+    // estar tirando cobros al aire durante días sin que nada lo diga.
+    //
+    // Sale el CÓDIGO, no el mensaje ni el error atrapado: los códigos son una
+    // lista cerrada que escribimos nosotros, así que no pueden arrastrar el
+    // secreto ni la URL de la base hacia el log.
+    console.error(
+      `[mp-webhook] no aplicada: ${applied.error.code}` +
+        (retryable ? " — se pide reintento" : " — no se reintenta"),
+    );
+
+    return respond(retryable ? 500 : 200);
   } catch {
     // Red de contención. Cualquier excepción que se escape río abajo se
     // convierte en un pedido de reintento en vez de en una pantalla de error
