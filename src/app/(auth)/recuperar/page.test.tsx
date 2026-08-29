@@ -46,4 +46,28 @@ describe("RecuperarPage", () => {
     expect(screen.queryByText(/tu-cuenta-fue-bloqueada/)).not.toBeInTheDocument();
     expect(screen.queryByText(/venció o ya se usó/i)).not.toBeInTheDocument();
   });
+
+  it("muestra el mail que llegó por la URL para confirmarlo", async () => {
+    await renderPage({ email: "vos@negocio.com" });
+
+    expect(screen.getByText("vos@negocio.com")).toBeInTheDocument();
+  });
+
+  /**
+   * El contracaso, y el que de verdad importa.
+   *
+   * Esta pantalla ya tenía la regla de no pintar lo que venga en la URL —por
+   * eso la bandera del link vencido se compara y el texto vive en el código—.
+   * El `email` es la excepción, y sólo se sostiene si pasa por el schema:
+   * si se pintara crudo, cualquiera mandaría un link con la frase que se le
+   * ocurra adentro de nuestro diseño y con nuestro dominio en la barra.
+   */
+  it("no pinta un `email` que no tiene forma de mail", async () => {
+    const fraude = "Escribinos al 11-2233 para desbloquear tu cuenta";
+    await renderPage({ email: fraude });
+
+    expect(screen.queryByText(fraude)).not.toBeInTheDocument();
+    // Y cae al formulario normal, que es el estado de "no sé quién sos".
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+  });
 });

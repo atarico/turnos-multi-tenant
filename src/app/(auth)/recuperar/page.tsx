@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Card } from "@/components/ui/card";
+import { recoverSchema } from "@/modules/auth/domain/schemas";
 import { RecoverForm } from "@/modules/auth/ui/recover-form";
 
 export const metadata: Metadata = { title: "Recuperar contraseña" };
@@ -17,6 +18,25 @@ export const metadata: Metadata = { title: "Recuperar contraseña" };
  */
 const EXPIRED_LINK_FLAG = "vencido";
 
+/**
+ * El mail que venía tipeado en `/ingresar`, si es que llegó por la URL.
+ *
+ * Acá arriba dice que la bandera del link vencido se COMPARA y nunca se pinta,
+ * y este parámetro parece contradecirlo: se muestra en pantalla. La diferencia
+ * es que no se muestra lo que venga, se muestra sólo lo que pasa por
+ * `recoverSchema` — o sea, algo con forma de email. Cualquier otra cosa se
+ * descarta y la pantalla se comporta como si nadie hubiera mandado nada.
+ *
+ * Sin ese filtro, un link armado a mano podría meter cualquier frase adentro
+ * de nuestro diseño; con él, lo peor que entra es un mail, que es exactamente
+ * el dato que esta pantalla existe para confirmar.
+ */
+function emailFromQuery(raw: string | string[] | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  const parsed = recoverSchema.safeParse({ email: raw });
+  return parsed.success ? parsed.data.email : null;
+}
+
 interface RecuperarPageProps {
   // En esta versión de Next `searchParams` es una Promise y hay que esperarla.
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -25,8 +45,9 @@ interface RecuperarPageProps {
 export default async function RecuperarPage({
   searchParams,
 }: RecuperarPageProps) {
-  const { link } = await searchParams;
+  const { link, email } = await searchParams;
   const linkExpired = link === EXPIRED_LINK_FLAG;
+  const knownEmail = emailFromQuery(email);
 
   return (
     <div className="w-full max-w-sm">
@@ -35,7 +56,9 @@ export default async function RecuperarPage({
           Recuperar contraseña
         </h1>
         <p className="mt-2 text-sm text-muted">
-          Te mandamos un link por mail para elegir una nueva.
+          {knownEmail
+            ? "Confirmá que este es tu mail y te mandamos el link."
+            : "Te mandamos un link por mail para elegir una nueva."}
         </p>
       </div>
 
@@ -46,7 +69,7 @@ export default async function RecuperarPage({
             más reciente.
           </p>
         )}
-        <RecoverForm />
+        <RecoverForm knownEmail={knownEmail} />
       </Card>
 
       <p className="mt-6 text-center text-sm text-muted">
