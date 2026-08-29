@@ -1,17 +1,30 @@
 "use client";
 
-import Link from "next/link";
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { idleState } from "@/core/action";
 
-import { signInAction } from "../application/actions";
+import { requestPasswordResetAction } from "../application/actions";
 
-export function LoginForm() {
-  const [state, action, pending] = useActionState(signInAction, idleState);
+export function RecoverForm() {
+  const [state, action, pending] = useActionState(
+    requestPasswordResetAction,
+    idleState,
+  );
   const fieldErrors = state.status === "error" ? state.fieldErrors : undefined;
+
+  // El éxito reemplaza al formulario, como en el registro. Dejar el campo a la
+  // vista invitaría a mandarlo de nuevo, y Supabase limita los reenvíos: el
+  // segundo intento no trae otro mail, trae un rechazo.
+  if (state.status === "success") {
+    return (
+      <div className="rounded-xl border border-success/30 bg-success/10 p-4 text-sm text-success">
+        {state.message}
+      </div>
+    );
+  }
 
   return (
     <form action={action} className="space-y-4">
@@ -33,30 +46,8 @@ export function LoginForm() {
         {fieldErrors?.email && <FieldError>{fieldErrors.email}</FieldError>}
       </div>
 
-      <div>
-        <Label htmlFor="password">Contraseña</Label>
-        <Input
-          id="password"
-          name="password"
-          type="password"
-          placeholder="Tu contraseña"
-          autoComplete="current-password"
-        />
-        {fieldErrors?.password && <FieldError>{fieldErrors.password}</FieldError>}
-        {/*
-          La salida para quien se olvidó la contraseña va PEGADA al campo que
-          no puede completar: es el momento exacto en que se necesita, y nadie
-          va a tipear /recuperar de memoria.
-        */}
-        <p className="mt-2 text-right text-xs">
-          <Link href="/recuperar" className="text-muted hover:text-gold">
-            ¿Olvidaste tu contraseña?
-          </Link>
-        </p>
-      </div>
-
       <Button type="submit" className="w-full" disabled={pending}>
-        {pending ? "Ingresando…" : "Ingresar"}
+        {pending ? "Mandando el link…" : "Mandarme el link"}
       </Button>
     </form>
   );
