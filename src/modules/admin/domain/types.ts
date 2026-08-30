@@ -38,4 +38,24 @@ export interface AdminTenant {
 export interface AdminTenantDetail {
   tenant: AdminTenant;
   subscription: Subscription | null;
+  /** El regalo vigente, si lo hay. Independiente de la suscripción. */
+  courtesy: PlanCourtesy | null;
+}
+
+/**
+ * Un plan regalado por un operador, tal como se ve desde la plataforma.
+ *
+ * `until` en `null` con una cortesía puesta significa "hasta que la saquen", y
+ * es un caso legítimo y frecuente: un trato sin fecha de fin.
+ *
+ * `reason` y `grantedAt` no son opcionales porque la base no deja que lo sean:
+ * el CHECK `tenants_plan_courtesy_complete` exige el hecho completo o ninguno.
+ * Un regalo sin motivo no se puede auditar, y dentro de seis meses un
+ * "premium" sin porqué es indistinguible de un error.
+ */
+export interface PlanCourtesy {
+  plan: PlanTier;
+  until: string | null;
+  reason: string;
+  grantedAt: string;
 }

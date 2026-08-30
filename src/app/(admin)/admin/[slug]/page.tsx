@@ -5,11 +5,16 @@ import { AlertTriangle, ArrowLeft, Globe } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  grantCourtesyAction,
+  revokeCourtesyAction,
+} from "@/modules/admin/application/courtesy-actions";
 import { getTenantDetail } from "@/modules/admin/application/tenant-detail";
 import { utcDateLabel } from "@/modules/admin/domain/dates";
 import { planIsOutOfSync } from "@/modules/admin/domain/plan-sync";
 import { planLabel } from "@/modules/billing/domain/plan";
 import type { SubscriptionStatus } from "@/modules/billing/domain/subscription";
+import { CourtesyPanel } from "@/modules/admin/ui/courtesy-panel";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
 
 export const metadata: Metadata = { title: "Negocio" };
@@ -67,7 +72,7 @@ export default async function AdminTenantDetailPage({
 
   if (!result.value) notFound();
 
-  const { tenant, subscription } = result.value;
+  const { tenant, subscription, courtesy } = result.value;
   const outOfSync = planIsOutOfSync(tenant.plan, subscription);
 
   return (
@@ -144,6 +149,15 @@ export default async function AdminTenantDetailPage({
           <span className="text-sm">{utcDateLabel(tenant.created_at)}</span>
         </Row>
       </Card>
+
+      <CourtesyPanel
+        tenantId={tenant.id}
+        slug={tenant.slug}
+        paidPlan={tenant.plan}
+        courtesy={courtesy}
+        grant={grantCourtesyAction}
+        revoke={revokeCourtesyAction}
+      />
     </div>
   );
 }
