@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import Link from "next/link";
+import { useActionState, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -11,6 +12,22 @@ import { signInAction } from "../application/actions";
 export function LoginForm() {
   const [state, action, pending] = useActionState(signInAction, idleState);
   const fieldErrors = state.status === "error" ? state.fieldErrors : undefined;
+
+  /**
+   * El mail se controla acá con un único fin: que el link de "olvidé mi
+   * contraseña" se lo lleve puesto.
+   *
+   * Quien llega a ese link ya escribió su mail una vez y falló la contraseña.
+   * Pedírselo de nuevo en la pantalla siguiente es hacerle repetir el único
+   * dato que sí se acuerda, y es donde se cuelan los typos: si se equivoca al
+   * retipearlo, el mail sale a una casilla que no es la suya y se queda
+   * esperando algo que nunca llega.
+   */
+  const [email, setEmail] = useState("");
+  const typed = email.trim();
+  const recoverHref = typed
+    ? `/recuperar?email=${encodeURIComponent(typed)}`
+    : "/recuperar";
 
   return (
     <form action={action} className="space-y-4">
@@ -28,6 +45,8 @@ export function LoginForm() {
           type="email"
           placeholder="vos@negocio.com"
           autoComplete="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
         />
         {fieldErrors?.email && <FieldError>{fieldErrors.email}</FieldError>}
       </div>
@@ -42,6 +61,16 @@ export function LoginForm() {
           autoComplete="current-password"
         />
         {fieldErrors?.password && <FieldError>{fieldErrors.password}</FieldError>}
+        {/*
+          La salida para quien se olvidó la contraseña va PEGADA al campo que
+          no puede completar: es el momento exacto en que se necesita, y nadie
+          va a tipear /recuperar de memoria.
+        */}
+        <p className="mt-2 text-right text-xs">
+          <Link href={recoverHref} className="text-muted hover:text-gold">
+            ¿Olvidaste tu contraseña?
+          </Link>
+        </p>
       </div>
 
       <Button type="submit" className="w-full" disabled={pending}>
