@@ -83,6 +83,11 @@ export async function startCheckoutAction(
     plan: parsed.data.plan,
     payerEmail: email,
     backUrl: backUrl(),
+    // Sin validar acá: el código no tiene forma conocida y validarlo contra un
+    // regex inventado rechazaría cupones legítimos antes de preguntarle a la
+    // única fuente que sabe. `startCheckout` lo normaliza y lo canjea, y un
+    // código que no sirve vuelve como `coupon_invalid`.
+    couponCode: String(formData.get("coupon") ?? ""),
   });
 
   if (!session.ok) {

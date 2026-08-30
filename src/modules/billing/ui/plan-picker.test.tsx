@@ -146,4 +146,37 @@ describe("PlanPicker", () => {
 
     resolve(idleState);
   });
+
+  /**
+   * El cupón se escribe UNA vez y viaja con el plan que se apriete.
+   *
+   * Cada plan tiene su propio <form>, así que un input suelto afuera no se
+   * enviaría con ninguno. Lo que se fija acá es que lo tipeado llegue al form
+   * de CADA tarjeta: si sólo llegara al primero, el dueño escribe el código,
+   * aprieta Premium y le cobran el precio entero sin que nadie le avise.
+   */
+  it("manda el cupón tipeado con cualquiera de los planes", async () => {
+    const user = userEvent.setup();
+    setup({ currentPlan: "basico" });
+
+    await user.type(screen.getByLabelText(/tenés un cupón/i), "beta99");
+
+    const ocultos = document.querySelectorAll<HTMLInputElement>(
+      'input[type="hidden"][name="coupon"]',
+    );
+    expect(ocultos).toHaveLength(3);
+    for (const input of ocultos) {
+      expect(input.value).toBe("beta99");
+    }
+  });
+
+  it("sin cupón, el campo viaja vacío y no rompe nada", () => {
+    setup({ currentPlan: "basico" });
+
+    const ocultos = document.querySelectorAll<HTMLInputElement>(
+      'input[type="hidden"][name="coupon"]',
+    );
+    expect(ocultos).toHaveLength(3);
+    expect([...ocultos].every((i) => i.value === "")).toBe(true);
+  });
 });

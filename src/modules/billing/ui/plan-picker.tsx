@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +58,12 @@ export function PlanPicker({
 }: PlanPickerProps) {
   const [state, action, pending] = useActionState(start, idleState);
 
+  // El código vive acá arriba y se replica oculto en cada tarjeta. Cada plan
+  // tiene su propio <form>, así que un input suelto afuera no viajaría con
+  // ninguno — y repetirlo visible tres veces le pediría al dueño que elija en
+  // cuál escribirlo.
+  const [coupon, setCoupon] = useState("");
+
   return (
     <div>
       {state.status === "error" && (
@@ -65,6 +71,20 @@ export function PlanPicker({
           {state.message}
         </p>
       )}
+
+      <label className="mb-4 flex max-w-sm flex-col gap-1.5">
+        <span className="text-sm text-muted">
+          ¿Tenés un cupón? (opcional)
+        </span>
+        <input
+          name="coupon-visible"
+          value={coupon}
+          onChange={(e) => setCoupon(e.target.value)}
+          placeholder="CÓDIGO"
+          autoCapitalize="characters"
+          className="rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-sm uppercase"
+        />
+      </label>
 
       <div className="grid gap-4 sm:grid-cols-3">
         {options.map((option) => {
@@ -103,6 +123,7 @@ export function PlanPicker({
 
               <form action={action} className="mt-5">
                 <input type="hidden" name="plan" value={option.plan} />
+                <input type="hidden" name="coupon" value={coupon} />
                 <Button
                   type="submit"
                   variant={isCurrent ? "outline" : "primary"}
