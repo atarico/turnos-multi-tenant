@@ -308,6 +308,34 @@ describe("AdminPage", () => {
   );
 
   /**
+   * Sin este link el detalle es inalcanzable: no hay buscador ni ninguna otra
+   * forma de llegar salvo tipear /admin/<slug> a mano.
+   *
+   * Se apunta al slug y no al id porque el slug es lo que el operador tiene a
+   * la vista y lo que puede tipear; un uuid en la barra no le dice nada a nadie.
+   */
+  it(
+    "hace clickeable cada negocio hacia su detalle",
+    { timeout: 15000 },
+    async () => {
+      const { listAllTenants } = await import(
+        "@/modules/admin/application/queries"
+      );
+      vi.mocked(listAllTenants).mockResolvedValue({ ok: true, value: tenants });
+      const { default: AdminPage } = await import("./page");
+
+      render(await AdminPage());
+
+      expect(
+        screen.getByRole("link", { name: /Barbería Vieja/ }),
+      ).toHaveAttribute("href", "/admin/viejo");
+      expect(
+        screen.getByRole("link", { name: /Peluquería Nueva/ }),
+      ).toHaveAttribute("href", "/admin/nuevo");
+    },
+  );
+
+  /**
    * El operador ahora ATERRIZA acá al ingresar, y esta pantalla no tiene menú
    * lateral ni ninguna otra navegación: sin este botón, la única forma de
    * cerrar sesión sería borrar la cookie a mano.
