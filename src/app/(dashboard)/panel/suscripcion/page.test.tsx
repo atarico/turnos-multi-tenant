@@ -74,7 +74,7 @@ async function renderPage(params: Record<string, string> = {}) {
 // Timeout ampliado en todos: cada test renderiza el Server Component entero y
 // bajo contención de CPU en la suite completa pasa de los 5000ms por defecto.
 describe("SuscripcionPage", () => {
-  it("manda a la bienvenida cuando la cuenta todavía no tiene negocio", { timeout: 15000 }, async () => {
+  it("manda al panel cuando la cuenta todavía no tiene negocio, para que él decida el destino", { timeout: 15000 }, async () => {
     const { getCurrentTenant } = await import(
       "@/modules/tenants/application/queries"
     );
@@ -83,7 +83,7 @@ describe("SuscripcionPage", () => {
 
     await expect(
       Page({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("NEXT_REDIRECT:/panel/bienvenida");
+    ).rejects.toThrow("NEXT_REDIRECT:/panel");
   });
 
   it("muestra los tres planes", { timeout: 15000 }, async () => {

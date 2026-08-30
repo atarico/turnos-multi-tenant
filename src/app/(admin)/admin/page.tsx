@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
-import { TZDate } from "@date-fns/tz";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
-import { Building2, CalendarDays, Globe, ShieldCheck } from "lucide-react";
+import Link from "next/link";
+import {
+  Building2,
+  CalendarDays,
+  Globe,
+  LogOut,
+  ShieldCheck,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { listAllTenants } from "@/modules/admin/application/queries";
+import { signOutAction } from "@/modules/auth/application/actions";
+import { utcDateLabel } from "@/modules/admin/domain/dates";
 import type { AdminTenant } from "@/modules/admin/domain/types";
 import { planLabel } from "@/modules/billing/domain/plan";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
@@ -24,46 +30,35 @@ const PLAN_VARIANTS: Record<PlanTier, "gold" | "info" | "muted"> = {
   basico: "muted",
 };
 
-/**
- * El alta se muestra en UTC, no en la hora local de quien renderiza.
- *
- * Acá no hay un negocio cuya zona horaria usar: se listan todos, de países
- * distintos. Dejarlo a la tz del servidor haría que la misma alta se viera en
- * un día u otro según dónde corra el render, que es la clase de diferencia que
- * después nadie puede explicar. UTC es arbitrario pero es igual para todos.
- *
- * El chequeo de fecha inválida NO es paranoia de tipos: `created_at` llega de
- * PostgREST como `string` por un cast sin validar, y ante un valor que no se
- * puede parsear `format` tira `RangeError`. Esta función corre adentro del
- * `map`, así que esa excepción no se llevaría puesta una fila: se lleva el
- * render de la lista ENTERA, y el dueño de la plataforma ve una pantalla rota
- * en vez de sus cien negocios por culpa de uno. Un guion es una fila fea; una
- * excepción es una pantalla que no existe.
- */
-function altaLabel(createdAt: string): string {
-  const ms = new Date(createdAt).getTime();
-  if (Number.isNaN(ms)) return "—";
-  return format(new TZDate(ms, "UTC"), "d MMM yyyy", {
-    locale: es,
-  });
-}
 
 export default async function AdminPage() {
   const result = await listAllTenants();
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <header>
-        <div className="flex items-center gap-2 text-sm text-gold">
-          <ShieldCheck className="size-4" />
-          Plataforma
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-gold">
+            <ShieldCheck className="size-4" />
+            Plataforma
+          </div>
+          <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight">
+            Administración
+          </h1>
+          <p className="mt-1 text-sm text-muted">
+            Todos los negocios dados de alta, del más nuevo al más viejo.
+          </p>
         </div>
-        <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-          Administración
-        </h1>
-        <p className="mt-1 text-sm text-muted">
-          Todos los negocios dados de alta, del más nuevo al más viejo.
-        </p>
+
+        {/* Esta pantalla no tiene menú ni ninguna otra navegación, y el operador
+            aterriza acá al ingresar: sin esta salida, cerrar sesión sería
+            borrar la cookie a mano. */}
+        <form action={signOutAction}>
+          <button className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground">
+            <LogOut className="size-4" />
+            Salir
+          </button>
+        </form>
       </header>
 
       {/* Las tres salidas son excluyentes y se ven distinto a propósito: un
@@ -80,7 +75,14 @@ export default async function AdminPage() {
         <ul className="mt-8 space-y-3">
           {result.value.map((tenant) => (
             <li key={tenant.id}>
-              <TenantRow tenant={tenant} />
+              {/* La fila ENTERA es el link, no un "ver detalle" al costado: el
+                  objetivo de click es la tarjeta que el ojo ya está mirando. */}
+              <Link
+                href={`/admin/${tenant.slug}`}
+                className="block rounded-2xl transition-opacity hover:opacity-80"
+              >
+                <TenantRow tenant={tenant} />
+              </Link>
             </li>
           ))}
         </ul>
@@ -114,7 +116,7 @@ function TenantRow({ tenant }: { tenant: AdminTenant }) {
         <div className="flex items-center gap-2">
           <CalendarDays className="size-4 text-faint" />
           <dt className="sr-only">Alta</dt>
-          <dd>{altaLabel(tenant.created_at)}</dd>
+          <dd>{utcDateLabel(tenant.created_at)}</dd>
         </div>
       </dl>
     </Card>

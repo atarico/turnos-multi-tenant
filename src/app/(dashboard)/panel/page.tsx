@@ -17,6 +17,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { landingWithoutTenant } from "@/modules/admin/application/landing";
 import { signOutAction } from "@/modules/auth/application/actions";
 import { getCurrentSubscription } from "@/modules/billing/application/queries";
 import { isInTrial, trialDaysLeft } from "@/modules/billing/domain/subscription";
@@ -65,8 +66,10 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
   const { bienvenida } = await searchParams;
   const tenant = await getCurrentTenant();
 
-  // Autenticado pero sin negocio (p. ej. registro con confirmación de email).
-  if (!tenant) redirect("/panel/bienvenida");
+  // Autenticado pero sin negocio. Eso pasa por dos motivos opuestos —recién
+  // registrado, u operador de plataforma, que no es miembro de ninguno— así que
+  // el destino se pregunta en vez de asumirse.
+  if (!tenant) redirect(await landingWithoutTenant());
 
   // Un solo reloj para las dos listas: son una agenda partida en dos por este
   // instante. Si cada consulta leyera el suyo, un turno que termina entre las
