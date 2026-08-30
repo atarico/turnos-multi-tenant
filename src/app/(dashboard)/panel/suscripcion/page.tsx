@@ -168,9 +168,18 @@ export default async function SuscripcionPage({
         {paying && subscription && (
           <p className="mt-2 text-sm text-muted">
             Próximo cobro:{" "}
-            {format(subscription.currentPeriodEnd, "d 'de' MMMM", {
-              locale: es,
-            })}
+            {/* En la zona horaria DEL NEGOCIO, no en la del servidor. Es una
+                fecha sobre plata: el dueño la lee para saber cuándo le
+                descuentan, y en el borde del mes las dos lecturas caen en
+                meses distintos. La cortesía de arriba se pinta en UTC y no acá
+                — no es una inconsistencia: aquélla es un día de calendario que
+                eligió el operador, ésta es un INSTANTE, y un instante se cuenta
+                desde donde está parado el que lo mira. */}
+            {format(
+              new TZDate(subscription.currentPeriodEnd, tenant.timezone),
+              "d 'de' MMMM",
+              { locale: es },
+            )}
           </p>
         )}
       </Card>

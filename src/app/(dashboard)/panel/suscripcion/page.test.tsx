@@ -295,4 +295,49 @@ describe("SuscripcionPage", () => {
       },
     );
   });
+
+  /**
+   * El próximo cobro se muestra en la zona horaria DEL NEGOCIO.
+   *
+   * Es una fecha sobre plata: el dueño la lee para saber cuándo le van a
+   * descontar. Pintada en la zona del servidor, un negocio mexicano ve el día
+   * que corresponde en Buenos Aires, y la diferencia se nota justo en el borde
+   * del mes, que es cuando importa.
+   *
+   * La zona del PROCESO se fija a UTC a propósito. Sin eso, en una máquina que
+   * ya corre en horario argentino el test pasaría con el bug puesto: estaría
+   * probando dónde corre la suite, no que se use `tenant.timezone`.
+   */
+  describe("con el proceso en UTC y el negocio en Buenos Aires", () => {
+    const tzOriginal = process.env.TZ;
+    beforeAll(() => {
+      process.env.TZ = "UTC";
+    });
+    afterAll(() => {
+      process.env.TZ = tzOriginal;
+    });
+
+    it(
+      "muestra el próximo cobro en la hora del negocio, no la del servidor",
+      { timeout: 15000 },
+      async () => {
+        const { getCurrentSubscription } = await import(
+          "@/modules/billing/application/queries"
+        );
+        // 02:00 UTC del 1 de septiembre son las 23:00 del 31 de agosto en
+        // Buenos Aires: las dos lecturas caen en meses distintos.
+        vi.mocked(getCurrentSubscription).mockResolvedValue(
+          subscription({
+            status: "active",
+            currentPeriodEnd: new Date("2026-09-01T02:00:00.000Z"),
+          }),
+        );
+
+        await renderPage();
+
+        expect(screen.getByText(/31 de agosto/i)).toBeInTheDocument();
+        expect(screen.queryByText(/1 de septiembre/i)).toBeNull();
+      },
+    );
+  });
 });
