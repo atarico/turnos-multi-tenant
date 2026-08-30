@@ -20,3 +20,18 @@ export function throwingRedirectSpy() {
     throw new Error(`NEXT_REDIRECT:${path}`);
   });
 }
+
+/**
+ * Lo mismo que {@link throwingRedirectSpy} pero para `notFound()`.
+ *
+ * Vive aparte porque en un guard las dos salidas NO son intercambiables: una
+ * manda al login y la otra dice que la ruta no existe. Un test que sólo mira
+ * "cortó la ejecución" pasaría igual si alguien cambiara el 404 por un
+ * redirect, que es justo el cambio que hay que impedir. Sentinelas distintos
+ * para poder afirmar CUÁL de las dos puertas se cerró.
+ */
+export function throwingNotFoundSpy() {
+  return vi.fn((): never => {
+    throw new Error("NEXT_NOT_FOUND");
+  });
+}
