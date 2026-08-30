@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
+import { ONBOARDING_PATH } from "@/modules/admin/application/landing";
 import type { Tenant } from "@/modules/tenants/domain/types";
 
 const redirect = throwingRedirectSpy();
@@ -20,6 +21,22 @@ vi.mock("@/modules/auth/application/queries", () => ({
 vi.mock("@/modules/tenants/application/actions", () => ({
   createBusinessAction: vi.fn(),
 }));
+// Sólo se reemplaza la decisión. Las constantes se dejan pasar de verdad: si el
+// mock inventara su propia ONBOARDING_PATH, el test compararía contra un valor
+// que no es el que corre en producción y la comparación quedaría probando nada.
+vi.mock("@/modules/admin/application/landing", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/modules/admin/application/landing")
+  >()),
+  landingWithoutTenant: vi.fn(),
+}));
+
+async function mockLanding(destination: string) {
+  const { landingWithoutTenant } = await import(
+    "@/modules/admin/application/landing"
+  );
+  vi.mocked(landingWithoutTenant).mockResolvedValue(destination);
+}
 
 const tenant: Tenant = {
   id: "t1",
@@ -48,8 +65,11 @@ async function mockSession(options: {
   vi.mocked(getCurrentUserName).mockResolvedValue(options.name ?? null);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  // Por defecto, quien llega sin negocio es alguien recién registrado: ésta es
+  // su pantalla y no la tiene que abandonar.
+  await mockLanding(ONBOARDING_PATH);
 });
 
 describe("WelcomePage", () => {
@@ -62,6 +82,25 @@ describe("WelcomePage", () => {
 
       await expect(WelcomePage()).rejects.toThrow("NEXT_REDIRECT:/panel");
       expect(redirect).toHaveBeenCalledWith("/panel");
+    },
+  );
+
+  /**
+   * Sin este guard, un operador que escribe la URL a mano —o que llega acá
+   * rebotado desde `/panel`— ve el formulario de alta y puede crearse un
+   * negocio sin querer. Y si lo crea, deja de ser "sin negocio": `/panel` ya no
+   * lo manda más a `/admin` y el panel de plataforma se le cierra solo.
+   */
+  it(
+    "manda al panel de plataforma cuando quien llega es un operador",
+    { timeout: 15000 },
+    async () => {
+      await mockSession({ tenant: null });
+      await mockLanding("/admin");
+      const { default: WelcomePage } = await import("./page");
+
+      await expect(WelcomePage()).rejects.toThrow("NEXT_REDIRECT:/admin");
+      expect(redirect).toHaveBeenCalledWith("/admin");
     },
   );
 

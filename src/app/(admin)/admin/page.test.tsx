@@ -14,6 +14,11 @@ import type { AdminTenant } from "@/modules/admin/domain/types";
 vi.mock("@/modules/admin/application/queries", () => ({
   listAllTenants: vi.fn(async () => ({ ok: true, value: [] })),
 }));
+// La server action arrastraría el cliente de Supabase al importarse; acá sólo
+// importa que el formulario exista y apunte a ella.
+vi.mock("@/modules/auth/application/actions", () => ({
+  signOutAction: vi.fn(),
+}));
 
 const tenants: AdminTenant[] = [
   {
@@ -299,6 +304,31 @@ describe("AdminPage", () => {
         screen.getByText(/todavía no hay ningún negocio/i),
       ).toBeInTheDocument();
       expect(screen.queryByText(/no pudimos cargar/i)).toBeNull();
+    },
+  );
+
+  /**
+   * El operador ahora ATERRIZA acá al ingresar, y esta pantalla no tiene menú
+   * lateral ni ninguna otra navegación: sin este botón, la única forma de
+   * cerrar sesión sería borrar la cookie a mano.
+   *
+   * Se prueba en la salida vacía a propósito. Es el estado en el que un botón
+   * de salir es más fácil de olvidar, y el que ve un operador nuevo en una
+   * plataforma recién montada.
+   */
+  it(
+    "deja cerrar sesión aunque no haya ningún negocio para mostrar",
+    { timeout: 15000 },
+    async () => {
+      const { listAllTenants } = await import(
+        "@/modules/admin/application/queries"
+      );
+      vi.mocked(listAllTenants).mockResolvedValue({ ok: true, value: [] });
+      const { default: AdminPage } = await import("./page");
+
+      render(await AdminPage());
+
+      expect(screen.getByRole("button", { name: /salir/i })).toBeInTheDocument();
     },
   );
 });

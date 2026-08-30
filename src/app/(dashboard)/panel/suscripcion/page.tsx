@@ -48,7 +48,11 @@ export default async function SuscripcionPage({
   const { preapproval_id: preapprovalId } = await searchParams;
   const tenant = await getCurrentTenant();
 
-  if (!tenant) redirect("/panel/bienvenida");
+  // Al panel, no a la bienvenida: adónde va una cuenta sin negocio tiene dos
+  // respuestas —recién registrado, u operador de plataforma— y esa decisión
+  // vive en un solo lugar. Saltearla acá mandaría al operador a crear un
+  // negocio. Es lo mismo que hacen /servicios, /profesionales y /configuración.
+  if (!tenant) redirect("/panel");
 
   const subscription = await getCurrentSubscription(tenant.id);
   const now = new Date();
