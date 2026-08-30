@@ -49,6 +49,7 @@ const detail: AdminTenantDetail = {
     created_at: "2026-08-01T00:00:00Z",
   },
   subscription,
+  courtesy: null,
 };
 
 async function mockDetail(
@@ -139,6 +140,7 @@ describe("AdminTenantDetailPage", () => {
       await mockDetail({
         tenant: { ...detail.tenant, plan: "basico" },
         subscription: { ...subscription, status: "canceled" },
+        courtesy: null,
       });
 
       await renderPage();

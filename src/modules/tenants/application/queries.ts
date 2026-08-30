@@ -1,5 +1,6 @@
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
+import { effectivePlan } from "@/modules/billing/domain/courtesy";
 
 import { toPublicTenant, type PublicTenantRow } from "../domain/tenant-mapper";
 import type { PublicTenant, Tenant } from "../domain/types";
@@ -30,8 +31,38 @@ export async function getCurrentTenant(): Promise<Tenant | null> {
     .maybeSingle();
 
   if (error || !data) return null;
-  // El join devuelve el tenant relacionado; lo normalizamos al tipo Tenant.
-  return (data.tenants as unknown as Tenant) ?? null;
+  if (!data.tenants) return null;
+
+  return withEffectivePlan(data.tenants as unknown as TenantRow, new Date());
+}
+
+/** La fila cruda de `tenants`: acá `plan` todavía es lo que se cobra. */
+type TenantRow = Omit<Tenant, "paid_plan">;
+
+/**
+ * Resuelve el plan efectivo ANTES de que la fila salga de la capa de datos.
+ *
+ * Es el único lugar donde una cortesía se convierte en permiso. Hacerlo acá y
+ * no en cada pantalla es deliberado: los límites se chequean en
+ * `staff/actions.ts` y se muestran en dos páginas más, y un llamador que se
+ * olvide de resolverlo no rompe nada visible — simplemente le niega a un
+ * negocio algo que se le regaló, y eso se descubre cuando el cliente reclama.
+ *
+ * Exportada para poder probarla sin levantar Supabase.
+ */
+export function withEffectivePlan(row: TenantRow, now: Date): Tenant {
+  const plan = effectivePlan(
+    {
+      plan: row.plan,
+      planCourtesy: row.plan_courtesy ?? null,
+      planCourtesyUntil: row.plan_courtesy_until
+        ? new Date(row.plan_courtesy_until)
+        : null,
+    },
+    now,
+  );
+
+  return { ...row, plan, paid_plan: row.plan };
 }
 
 /**

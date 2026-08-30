@@ -34,6 +34,35 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
 };
 
 /**
+ * El orden de los planes, de menos a más.
+ *
+ * Espeja la declaración del enum `public.plan_tier`, donde Postgres compara por
+ * orden de declaración. Están escritos acá y no derivados de `PLAN_LIMITS`
+ * porque el orden es una decisión de producto, no una consecuencia de los
+ * números: si mañana un plan tuviera más profesionales pero menos WhatsApp,
+ * derivarlo de los límites daría un orden distinto según qué límite se mire.
+ */
+const PLAN_RANK: Record<PlanTier, number> = {
+  basico: 0,
+  pro: 1,
+  premium: 2,
+};
+
+/**
+ * El mejor de dos planes.
+ *
+ * Existe para que un regalo nunca empeore lo comprado: ver `effectivePlan`.
+ * Ante un plan que no está en el catálogo prefiere el otro, con el mismo
+ * criterio de `limitsFor` — pero sin romper, porque acá siempre hay una
+ * respuesta segura disponible y romper dejaría al negocio sin ningún plan.
+ */
+export function betterPlan(a: PlanTier, b: PlanTier): PlanTier {
+  const rankA = Object.hasOwn(PLAN_RANK, a) ? PLAN_RANK[a] : -1;
+  const rankB = Object.hasOwn(PLAN_RANK, b) ? PLAN_RANK[b] : -1;
+  return rankB > rankA ? b : a;
+}
+
+/**
  * Límites del plan, o error si el plan no está en el catálogo.
  *
  * `PlanTier` es una unión de TypeScript y el valor real sale de una columna de

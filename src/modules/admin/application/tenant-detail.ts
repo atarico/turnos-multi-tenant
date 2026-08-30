@@ -5,9 +5,15 @@ import {
   toSubscription,
 } from "@/modules/billing/domain/subscription-mapper";
 
-import type { AdminTenant, AdminTenantDetail } from "../domain/types";
+import type {
+  AdminTenant,
+  AdminTenantDetail,
+  PlanCourtesy,
+} from "../domain/types";
 
-const TENANT_COLUMNS = "id, slug, name, country, plan, created_at";
+const TENANT_COLUMNS =
+  "id, slug, name, country, plan, created_at, " +
+  "plan_courtesy, plan_courtesy_until, plan_courtesy_reason, plan_courtesy_granted_at";
 
 const SUBSCRIPTION_COLUMNS =
   "id, tenant_id, plan, status, current_period_start, current_period_end, " +
@@ -70,7 +76,7 @@ export async function getTenantDetail(
     if (tenantError) return failed();
     if (!tenant) return ok(null);
 
-    const found = tenant as unknown as AdminTenant;
+    const found = tenant as unknown as AdminTenant & CourtesyColumns;
 
     const { data: subscription, error: subscriptionError } = await supabase
       .from("subscriptions")
@@ -87,8 +93,35 @@ export async function getTenantDetail(
       subscription: subscription
         ? toSubscription(subscription as unknown as SubscriptionRow)
         : null,
+      courtesy: toCourtesy(found),
     });
   } catch {
     return failed();
   }
+}
+
+/** Las cuatro columnas de cortesía, tal como vienen de PostgREST. */
+interface CourtesyColumns {
+  plan_courtesy: AdminTenant["plan"] | null;
+  plan_courtesy_until: string | null;
+  plan_courtesy_reason: string | null;
+  plan_courtesy_granted_at: string | null;
+}
+
+/**
+ * Las cuatro columnas sueltas → un hecho, o ninguno.
+ *
+ * `plan_courtesy` sola decide. Las otras tres no se chequean por separado
+ * porque el CHECK de la base ya garantiza que viajan juntas; mirarlas acá una
+ * por una sugeriría que puede llegar un regalo a medias y obligaría a inventar
+ * qué hacer con él.
+ */
+function toCourtesy(row: CourtesyColumns): PlanCourtesy | null {
+  if (!row.plan_courtesy) return null;
+  return {
+    plan: row.plan_courtesy,
+    until: row.plan_courtesy_until,
+    reason: row.plan_courtesy_reason ?? "",
+    grantedAt: row.plan_courtesy_granted_at ?? "",
+  };
 }
