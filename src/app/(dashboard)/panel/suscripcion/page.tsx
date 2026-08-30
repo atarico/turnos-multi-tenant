@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Gift } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { startCheckoutAction } from "@/modules/billing/application/actions";
@@ -65,6 +66,11 @@ export default async function SuscripcionPage({
     ? PAYING_STATUSES.has(subscription.status)
     : false;
 
+  // Hay una cortesía EN EFECTO cuando lo que el negocio puede usar difiere de
+  // lo que paga. No hace falta mirar la fecha: `getCurrentTenant` ya descartó
+  // las vencidas, y una cortesía que no mejora nada no tiene nada que anunciar.
+  const courtesy = tenant.plan !== tenant.paid_plan;
+
   const trialDays =
     subscription && isInTrial(subscription, now)
       ? trialDaysLeft(subscription, now)
@@ -125,6 +131,33 @@ export default async function SuscripcionPage({
           {planLabel(tenant.plan)}
         </p>
 
+        {/* Un plan mejor sin explicación se lee como algo comprado, y el día
+            que caduca el negocio cree que le sacaron lo que pagó. Las dos
+            preguntas que tiene que poder contestar son por qué lo tiene y qué
+            pasa cuando se termine: las dos se contestan acá. */}
+        {courtesy && (
+          <p className="mt-2 flex items-start gap-2 rounded-lg border border-gold/30 bg-gold/10 px-3 py-2 text-sm text-foreground">
+            <Gift className="mt-0.5 size-4 shrink-0 text-gold" />
+            <span>
+              Es una <b>cortesía</b> de la plataforma, no un plan contratado.
+              {tenant.plan_courtesy_until
+                ? ` Va hasta el ${format(
+                    // En UTC, que es la zona en la que se guardó. La fecha la
+                    // elige el operador con un selector de día y se almacena
+                    // como medianoche UTC: leída en hora local del servidor,
+                    // cae el día ANTERIOR y el dueño ve un vencimiento que no
+                    // es el que se pactó.
+                    new TZDate(new Date(tenant.plan_courtesy_until), "UTC"),
+                    "d 'de' MMMM",
+                    { locale: es },
+                  )}`
+                : " No tiene fecha de fin"}
+              , y cuando termine tu cuenta vuelve a{" "}
+              {planLabel(tenant.paid_plan)}.
+            </span>
+          </p>
+        )}
+
         {trialDays > 0 && (
           <p className="mt-2 text-sm text-muted">
             Prueba gratis · te quedan {trialDays}{" "}
@@ -148,7 +181,10 @@ export default async function SuscripcionPage({
 
       <PlanPicker
         options={options}
-        currentPlan={tenant.plan}
+        // Lo que se PAGA, no lo efectivo: marcar la cortesía acá la mostraría
+        // como contratada y —con un cobro abierto— la bloquearía, dejando al
+        // negocio sin poder cambiar de plan. El regalo se explica arriba.
+        currentPlan={tenant.paid_plan}
         paying={paying}
         start={startCheckoutAction}
       />

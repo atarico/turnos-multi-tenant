@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
 import type { Subscription } from "@/modules/billing/domain/subscription";
@@ -65,11 +65,14 @@ const subscription = (over: Partial<Subscription> = {}): Subscription => ({
   ...over,
 });
 
-async function renderPage(params: Record<string, string> = {}) {
+async function renderPage(
+  params: Record<string, string> = {},
+  negocio: Tenant = tenant,
+) {
   const { getCurrentTenant } = await import(
     "@/modules/tenants/application/queries"
   );
-  vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+  vi.mocked(getCurrentTenant).mockResolvedValue(negocio);
 
   const { default: Page } = await import("./page");
   render(await Page({ searchParams: Promise.resolve(params) }));
@@ -175,5 +178,121 @@ describe("SuscripcionPage", () => {
     expect(
       screen.getAllByRole("button", { name: /contratar/i }),
     ).toHaveLength(3);
+  });
+
+  /**
+   * Tests de la cortesía vista por el DUEÑO.
+   *
+   * Desde el panel de plataforma un regalo se ve completo —plan, motivo, quién
+   * lo dio—. Desde acá lo único que importa son dos preguntas que el dueño
+   * necesita poder contestar: por qué tengo este plan si no lo pago, y qué pasa
+   * cuando se termine. Un plan mejor sin explicación se lee como algo comprado,
+   * y el día que caduca el negocio cree que le sacaron algo.
+   */
+  /** El cartel de cortesía, por su texto ancla. Tira si no está. */
+  function avisoDeCortesia(): HTMLElement {
+    return screen.getByText(/cortesía/i).closest("p") as HTMLElement;
+  }
+
+  describe("con una cortesía", () => {
+    const conCortesia: Tenant = {
+      ...tenant,
+      plan: "premium",
+      paid_plan: "basico",
+      plan_courtesy: "premium",
+      plan_courtesy_reason: "beta tester",
+    };
+
+    it(
+      "avisa que el plan es de cortesía y a cuál vuelve",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, conCortesia);
+
+        // El cartel mezcla texto y <b>, así que el texto vive partido en varios
+        // nodos y un getByText por frase no lo encuentra aunque esté en pantalla.
+        // Se afirma sobre el textContent del cartel entero.
+        expect(avisoDeCortesia().textContent).toMatch(/cortesía/i);
+        expect(avisoDeCortesia().textContent).toMatch(/vuelve a Básico/i);
+      },
+    );
+
+    it(
+      "sin vencimiento, lo dice en vez de dejarlo en blanco",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, { ...conCortesia, plan_courtesy_until: null });
+
+        expect(avisoDeCortesia().textContent).toMatch(/no tiene fecha de fin/i);
+      },
+    );
+
+    /**
+     * La fecha se pinta en UTC, y la zona del proceso se fija a mano para que
+     * eso se PRUEBE en vez de salir bien de casualidad.
+     *
+     * Medianoche UTC del 1 de diciembre son las 21hs del 30 de noviembre en
+     * Buenos Aires. Sin el TZDate, el operador elige un día y el dueño lee el
+     * anterior. En una máquina en UTC este test pasaría igual con el bug
+     * puesto: por eso la zona no se deja al azar de dónde corra la suite.
+     */
+    describe("con el proceso en horario argentino", () => {
+      const tzOriginal = process.env.TZ;
+      beforeAll(() => {
+        process.env.TZ = "America/Argentina/Buenos_Aires";
+      });
+      afterAll(() => {
+        process.env.TZ = tzOriginal;
+      });
+
+      it(
+        "con vencimiento, dice el día que se pactó y no el anterior",
+        { timeout: 15000 },
+        async () => {
+          await renderPage({}, {
+            ...conCortesia,
+            plan_courtesy_until: "2026-12-01T00:00:00.000Z",
+          });
+
+          const texto = avisoDeCortesia().textContent ?? "";
+          expect(texto).toMatch(/hasta el 1 de diciembre/i);
+          expect(texto).not.toMatch(/30 de noviembre/i);
+        },
+      );
+    });
+
+    /**
+     * EL BUG QUE ESTE CAMBIO ARREGLA.
+     *
+     * El picker marcaba como "Tu plan" el plan EFECTIVO, y lo bloqueaba cuando
+     * había un cobro abierto. Un negocio que paga básico con una cortesía
+     * premium veía premium bloqueado como si lo estuviera pagando, básico sin
+     * marcar, y no podía cambiar de plan.
+     *
+     * El picker habla de la relación comercial: lo que marca es lo que se paga.
+     * La cortesía se explica arriba, en su propio cartel.
+     */
+    it(
+      "el selector marca el plan que se PAGA, no el regalado",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, conCortesia);
+
+        const marca = screen.getByText("Tu plan");
+        const tarjeta = marca.closest("div")?.parentElement;
+        expect(tarjeta).not.toBeNull();
+        expect(within(tarjeta as HTMLElement).getByRole("heading", { level: 3 }).textContent).toBe("Básico");
+      },
+    );
+
+    it(
+      "sin cortesía no aparece ningún cartel de regalo",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, tenant);
+
+        expect(screen.queryByText(/cortesía/i)).toBeNull();
+      },
+    );
   });
 });
