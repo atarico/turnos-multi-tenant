@@ -1,3 +1,4 @@
+import type { Subscription } from "@/modules/billing/domain/subscription";
 import type { CountryCode } from "@/modules/tenants/domain/countries";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 
@@ -21,4 +22,20 @@ export interface AdminTenant {
   country: CountryCode;
   plan: PlanTier;
   created_at: string;
+}
+
+/**
+ * Un negocio visto desde la plataforma, con su suscripción al lado.
+ *
+ * Las dos cosas van juntas y no separadas a propósito: la pregunta que el
+ * operador trae a esta pantalla no es "qué plan tiene" ni "qué suscripción
+ * tiene", es si las dos dicen lo mismo. Ver [[planIsOutOfSync]].
+ *
+ * `subscription` en `null` significa que el negocio no tiene NINGUNA, ni
+ * siquiera cancelada. Que la consulta haya fallado nunca llega hasta acá: eso
+ * sale por el `err` del `Result`.
+ */
+export interface AdminTenantDetail {
+  tenant: AdminTenant;
+  subscription: Subscription | null;
 }
