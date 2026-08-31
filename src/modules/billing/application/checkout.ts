@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 
 import { planLabel } from "../domain/plan";
+import { applyDiscount } from "../domain/discount";
 import { priceUsdCentsFor, usdCentsToArsCents } from "../domain/price";
 import { quoteUsdToArs } from "./fx";
 import { createPreapproval } from "./mercadopago";
@@ -59,6 +60,8 @@ export interface StartCheckoutParams {
   payerEmail: string;
   /** A dónde vuelve el pagador cuando termina en la pasarela. */
   backUrl: string;
+  /** Lo que el dueño tipeó en el campo de cupón. Vacío o ausente = sin cupón. */
+  couponCode?: string;
   now?: Date;
 }
 
@@ -118,6 +121,72 @@ export async function startCheckout(
     );
   }
 
+  // ---- Cupón -----------------------------------------------------------
+  //
+  // Se canjea ANTES de abrir el preapproval, porque el monto que se manda a la
+  // pasarela ya tiene que venir rebajado: no hay forma de descontar después.
+  // La contra es que un fallo posterior quema el canje. Es la dirección
+  // conservadora a propósito — canjear de menos cuesta una venta, canjear de
+  // más cuesta plata todos los meses, para siempre.
+  let couponCode: string | null = null;
+  let discountBps: number | null = null;
+
+  const typed = params.couponCode?.trim().toUpperCase() ?? "";
+  if (typed !== "") {
+    let redeemed: { data: unknown; error: unknown };
+    try {
+      redeemed = await createAdminClient().rpc("redeem_coupon", {
+        p_code: typed,
+        p_now: now.toISOString(),
+      });
+    } catch {
+      return err(
+        appError(
+          "coupon_check_failed",
+          "No pudimos validar el cupón. Intentá de nuevo en un momento.",
+        ),
+      );
+    }
+
+    if (redeemed.error) {
+      return err(
+        appError(
+          "coupon_check_failed",
+          "No pudimos validar el cupón. Intentá de nuevo en un momento.",
+        ),
+      );
+    }
+
+    // Un código que no sirve CORTA el checkout en vez de seguir al precio de
+    // lista. El dueño lo escribió esperando pagar menos: cobrarle el total en
+    // silencio es una sorpresa sobre plata, y una sorpresa sobre plata es un
+    // reclamo al banco. Los cuatro motivos —no existe, apagado, vencido,
+    // agotado— dan el mismo mensaje: distinguirlos convierte el campo en un
+    // oráculo para adivinar códigos ajenos.
+    if (redeemed.data === null || redeemed.data === undefined) {
+      return err(
+        appError(
+          "coupon_invalid",
+          "Ese cupón no es válido. Revisá el código o probá sin cupón.",
+        ),
+      );
+    }
+
+    couponCode = typed;
+    discountBps = redeemed.data as number;
+
+    try {
+      amountArsCents = applyDiscount(amountArsCents, discountBps);
+    } catch {
+      return err(
+        appError(
+          "price_conversion_failed",
+          "No pudimos calcular el precio con el cupón. Intentá de nuevo.",
+        ),
+      );
+    }
+  }
+
   if (amountArsCents > MAX_CHARGED_AMOUNT_CENTS) {
     return err(
       appError(
@@ -163,6 +232,11 @@ export async function startCheckout(
       p_fx_quoted_at: quote.value.quotedAt.toISOString(),
       p_provider: PROVIDER,
       p_provider_subscription_id: session.value.providerSubscriptionId,
+      // El cupón viaja a la fila de identidad, no se relee después: el cobro
+      // del mes que viene corresponde a lo pactado en ESTE preapproval, y
+      // apagar un cupón no puede subirle el precio a quien ya lo usó.
+      p_coupon_code: couponCode,
+      p_discount_bps: discountBps,
     });
   } catch {
     return notStamped();
