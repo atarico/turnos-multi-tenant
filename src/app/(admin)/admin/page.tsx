@@ -6,6 +6,7 @@ import {
   Globe,
   LogOut,
   ShieldCheck,
+  Ticket,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +51,15 @@ export default async function AdminPage() {
           </p>
         </div>
 
+        <div className="flex items-center gap-4">
+          <Link
+            href="/admin/cupones"
+            className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
+          >
+            <Ticket className="size-4" />
+            Cupones
+          </Link>
+
         {/* Esta pantalla no tiene menú ni ninguna otra navegación, y el operador
             aterriza acá al ingresar: sin esta salida, cerrar sesión sería
             borrar la cookie a mano. */}
@@ -59,6 +69,7 @@ export default async function AdminPage() {
             Salir
           </button>
         </form>
+        </div>
       </header>
 
       {/* Las tres salidas son excluyentes y se ven distinto a propósito: un

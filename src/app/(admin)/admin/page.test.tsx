@@ -359,4 +359,19 @@ describe("AdminPage", () => {
       expect(screen.getByRole("button", { name: /salir/i })).toBeInTheDocument();
     },
   );
+
+  /**
+   * Sin este link, /admin/cupones sólo se alcanza tipeando la URL — el mismo
+   * agujero que tenía /admin antes de que el login llevara ahí.
+   */
+  it("deja llegar a los cupones", { timeout: 15000 }, async () => {
+    const { default: AdminPage } = await import("./page");
+
+    render(await AdminPage());
+
+    expect(screen.getByRole("link", { name: /cupones/i })).toHaveAttribute(
+      "href",
+      "/admin/cupones",
+    );
+  });
 });
