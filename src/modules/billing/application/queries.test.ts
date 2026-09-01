@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SubscriptionRow } from "../domain/subscription-mapper";
 
-import { getCurrentSubscription } from "./queries";
+import { countPeriodBookings, getCurrentSubscription } from "./queries";
 
 /**
  * Tests de `getCurrentSubscription`.
@@ -36,6 +36,16 @@ function chain() {
   return builder;
 }
 
+/** Lo que devuelve el RPC de conteo. Un test lo pisa por caso. */
+let rpcResult: { data: unknown; error: unknown } = { data: 0, error: null };
+
+/** Tipada con los dos argumentos reales: sin esto `vi.fn` infiere cero. */
+type RpcCall = (
+  fn: string,
+  args: Record<string, unknown>,
+) => Promise<typeof rpcResult>;
+const rpc = vi.fn<RpcCall>(async () => rpcResult);
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => {
     if (clientFailure) throw clientFailure;
@@ -48,6 +58,10 @@ vi.mock("@/lib/supabase/server", () => ({
             return chain();
           },
         };
+      },
+      rpc: (fn: string, args: Record<string, unknown>) => {
+        rpc(fn, args);
+        return rpcResult;
       },
     };
   },
@@ -157,5 +171,84 @@ describe("getCurrentSubscription", () => {
     clientFailure = new Error("no se pudo crear el cliente");
 
     await expect(getCurrentSubscription("tenant-1")).resolves.toBeNull();
+  });
+});
+
+
+/**
+ * Tests del conteo de turnos del período.
+ *
+ * Alimenta el aviso de techo del panel. Sus dos obsesiones:
+ *
+ * 1. **El conteo lo hace Postgres.** Traer las filas y contarlas acá se rompe
+ *    contra el `max_rows` de PostgREST, que recorta en 1000 SIN devolver
+ *    error. Justo el negocio que hay que avisar —el que se pasó del techo— es
+ *    el que caería del otro lado del recorte.
+ *
+ * 2. **Un fallo devuelve `null`, nunca cero.** Cero es un número y significa
+ *    "no cargaste nada": mostrarlo cuando en realidad no pudimos contar le
+ *    diría al dueño que está tranquilo justo cuando no sabemos si lo está.
+ *    `null` apaga el aviso en vez de inventarlo.
+ */
+describe("countPeriodBookings", () => {
+  const START = "2026-09-01T00:00:00.000Z";
+  const END = "2026-10-01T00:00:00.000Z";
+
+  beforeEach(() => {
+    rpcResult = { data: 0, error: null };
+    rpc.mockClear();
+  });
+
+  it("delega el conteo a la base", () => {
+    return countPeriodBookings("tenant-1", START, END).then(() => {
+      expect(rpc).toHaveBeenCalledWith(
+        "count_period_bookings",
+        expect.anything(),
+      );
+    });
+  });
+
+  it("devuelve el número que contó la base", async () => {
+    rpcResult = { data: 247, error: null };
+
+    expect(await countPeriodBookings("tenant-1", START, END)).toBe(247);
+  });
+
+  it("acota la ventana al período que se le pasa", async () => {
+    await countPeriodBookings("tenant-1", START, END);
+
+    const args = rpc.mock.calls[0]?.[1] ?? {};
+    expect(args.p_start).toBe(START);
+    expect(args.p_end).toBe(END);
+  });
+
+  it("consulta el negocio que se le pide y no otro", async () => {
+    await countPeriodBookings("tenant-1", START, END);
+
+    const args = rpc.mock.calls[0]?.[1] ?? {};
+    expect(args.p_tenant_id).toBe("tenant-1");
+  });
+
+  it("un fallo de la base devuelve null, NO cero", async () => {
+    rpcResult = { data: null, error: { message: "boom" } };
+
+    expect(await countPeriodBookings("tenant-1", START, END)).toBeNull();
+  });
+
+  it("si no se puede ni crear el cliente, devuelve null y no rompe", async () => {
+    // El panel mete esto en un `Promise.all`: una promesa rechazada acá se
+    // lleva puesta la pantalla entera por un cartel informativo.
+    clientFailure = new Error("sin sesión");
+
+    await expect(
+      countPeriodBookings("tenant-1", START, END),
+    ).resolves.toBeNull();
+  });
+
+  it("cero turnos es cero, no un fallo", async () => {
+    // El caso feliz del negocio nuevo. Tiene que distinguirse de `null`.
+    rpcResult = { data: 0, error: null };
+
+    expect(await countPeriodBookings("tenant-1", START, END)).toBe(0);
   });
 });

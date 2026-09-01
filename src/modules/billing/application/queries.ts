@@ -115,3 +115,43 @@ export async function getLiveSubscriptionIdForCharge(
 
   return ok(data.id);
 }
+
+/**
+ * Cuántos turnos CARGÓ el negocio dentro de la ventana, o `null` si no se pudo
+ * contar.
+ *
+ * El conteo lo hace Postgres (`count_period_bookings`) y no esta función, por
+ * lo mismo que `sumMonthlyRevenue`: traer las filas para contarlas acá se
+ * rompe contra el `max_rows` de PostgREST, que recorta la respuesta en 1000
+ * filas SIN devolver error. Y el recorte pegaría justo en el único caso que
+ * importa — el negocio que se pasó del techo es, por definición, el que tiene
+ * más filas que nadie.
+ *
+ * **Devuelve `null` ante cualquier fallo, y eso NO es lo mismo que cero.**
+ * Cero significa "no cargaste nada" y es una respuesta; `null` significa "no
+ * sabemos". Colapsarlos le diría al dueño que va tranquilo justo cuando no
+ * podemos afirmarlo, que es la única forma de que este aviso mienta.
+ *
+ * El `try` abarca también la creación del cliente y no sólo la consulta: esto
+ * viaja en el mismo `Promise.all` que `getCurrentSubscription`, donde una
+ * promesa rechazada se lleva puesta la pantalla entera por un cartel.
+ */
+export async function countPeriodBookings(
+  tenantId: string,
+  periodStartIso: string,
+  periodEndIso: string,
+): Promise<number | null> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("count_period_bookings", {
+      p_tenant_id: tenantId,
+      p_start: periodStartIso,
+      p_end: periodEndIso,
+    });
+
+    if (error || typeof data !== "number") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { hasRoomForStaff, isOverStaffLimit, limitsFor, planLabel } from "./plan";
+import {
+  bookingCeilingState,
+  hasRoomForStaff,
+  isOverStaffLimit,
+  limitsFor,
+  planLabel,
+} from "./plan";
 
 /**
  * Los límites del plan son de dos clases distintas y conviene no mezclarlas.
@@ -143,6 +149,53 @@ describe("planLabel", () => {
   it("una clave heredada del prototipo tampoco pasa", () => {
     expect(() =>
       planLabel("toString" as Parameters<typeof planLabel>[0]),
+    ).toThrow();
+  });
+});
+
+
+/**
+ * El techo de turnos del período.
+ *
+ * Se cuenta por CARGA (`created_at`), no por fecha del turno: el techo existe
+ * para ver abuso, y contar por `starts_at` lo dejaría ciego justo ante el caso
+ * más obvio —cargar cincuenta mil turnos con fecha del año que viene no
+ * topearía ningún período nunca—. Contar por carga puede avisar de más; no
+ * contar por carga no avisa nunca. Los dos errores no cuestan lo mismo.
+ *
+ * Por lo mismo, un turno cancelado CUENTA: ya ocupó una fila y ya consumió
+ * sistema. Que después se cancele no devuelve lo gastado.
+ */
+describe("bookingCeilingState", () => {
+  it("un período tranquilo no tiene nada que avisar", () => {
+    expect(bookingCeilingState("basico", 0)).toBe("under");
+    expect(bookingCeilingState("basico", 100)).toBe("under");
+  });
+
+  it("avisa al llegar al 80% del techo, no antes", () => {
+    // Básico son 300. El 80% es 240.
+    expect(bookingCeilingState("basico", 239)).toBe("under");
+    expect(bookingCeilingState("basico", 240)).toBe("near");
+  });
+
+  it("tocar el techo ya es haberlo alcanzado, no estar cerca", () => {
+    // Consumir el cupo entero es EL evento que hay que contar. Llamarlo
+    // "casi" le diría al dueño que todavía le queda algo, y no le queda.
+    expect(bookingCeilingState("basico", 299)).toBe("near");
+    expect(bookingCeilingState("basico", 300)).toBe("over");
+    expect(bookingCeilingState("basico", 5000)).toBe("over");
+  });
+
+  it("el techo es el del plan, no un número fijo", () => {
+    // 300 turnos ahogan a Básico y son un martes cualquiera en Premium.
+    expect(bookingCeilingState("basico", 300)).toBe("over");
+    expect(bookingCeilingState("pro", 300)).toBe("under");
+    expect(bookingCeilingState("premium", 300)).toBe("under");
+  });
+
+  it("un plan que no está en el catálogo rompe, no devuelve undefined", () => {
+    expect(() =>
+      bookingCeilingState("enterprise" as Parameters<typeof limitsFor>[0], 10),
     ).toThrow();
   });
 });
