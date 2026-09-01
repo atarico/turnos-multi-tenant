@@ -77,9 +77,8 @@ export default function HomePage() {
             className="animate-rise mt-6 max-w-md text-lg leading-relaxed text-muted"
             style={{ animationDelay: "160ms" }}
           >
-            Calendario inteligente, cobros con Mercado Pago y Stripe, y
-            recordatorios automáticos por WhatsApp. Tus clientes reservan solos,
-            vos cobrás antes del turno.
+            Calendario inteligente y cobros con Mercado Pago. Tus clientes
+            reservan solos, vos cobrás antes del turno.
           </p>
 
           <div
@@ -102,18 +101,17 @@ export default function HomePage() {
             className="animate-rise mt-10 flex flex-wrap gap-x-6 gap-y-3 text-sm text-faint"
             style={{ animationDelay: "320ms" }}
           >
-            <span className="inline-flex items-center gap-2">
-              <CreditCard className="size-4 text-gold-dim" />
-              Mercado Pago &amp; Stripe
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <MessageCircle className="size-4 text-gold-dim" />
+            <HeroChip icon={CreditCard}>Mercado Pago</HeroChip>
+            <HeroChip icon={CalendarCheck}>Multi-negocio</HeroChip>
+            {/* Todavía no existen. Anticiparlos es legítimo; darlos por
+                entregados es venderle a alguien algo que no va a encontrar
+                cuando entre. */}
+            <HeroChip icon={MessageCircle} soon>
               Recordatorios por WhatsApp
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <CalendarCheck className="size-4 text-gold-dim" />
-              Multi-negocio
-            </span>
+            </HeroChip>
+            <HeroChip icon={CreditCard} soon>
+              Cobros con Stripe
+            </HeroChip>
           </div>
         </div>
 
@@ -208,5 +206,31 @@ export default function HomePage() {
         Hecho para profesionales que valoran su tiempo.
       </footer>
     </main>
+  );
+}
+
+/**
+ * Una prestación del hero, y si ya se puede usar o todavía no.
+ *
+ * `soon` no es decoración: separa lo que alguien va a encontrar cuando entre
+ * de lo que le vamos a deber. Las dos cosas pueden anunciarse — lo que no
+ * puede es que se lean igual, porque quien lee esta fila está decidiendo si
+ * se registra.
+ */
+function HeroChip({
+  icon: Icon,
+  soon = false,
+  children,
+}: {
+  icon: typeof CreditCard;
+  soon?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span data-hero-chip className="inline-flex items-center gap-2">
+      <Icon className={soon ? "size-4 text-faint" : "size-4 text-gold-dim"} />
+      {children}
+      {soon && <Badge variant="muted">Próximamente</Badge>}
+    </span>
   );
 }
