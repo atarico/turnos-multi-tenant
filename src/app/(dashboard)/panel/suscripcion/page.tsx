@@ -8,8 +8,15 @@ import { ArrowLeft, Gift } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { startCheckoutAction } from "@/modules/billing/application/actions";
-import { getCurrentSubscription } from "@/modules/billing/application/queries";
-import { limitsFor, planLabel } from "@/modules/billing/domain/plan";
+import {
+  countPeriodBookings,
+  getCurrentSubscription,
+} from "@/modules/billing/application/queries";
+import {
+  bookingCeilingState,
+  limitsFor,
+  planLabel,
+} from "@/modules/billing/domain/plan";
 import { priceUsdCentsFor } from "@/modules/billing/domain/price";
 import {
   isInTrial,
@@ -75,6 +82,29 @@ export default async function SuscripcionPage({
     subscription && isInTrial(subscription, now)
       ? trialDaysLeft(subscription, now)
       : 0;
+
+  // El techo se mide contra el período de la suscripción, no contra el mes
+  // civil: es la ventana que el negocio efectivamente pagó, y arranca el día
+  // que entró el cobro. Sin suscripción no hay período contra el cual medir.
+  //
+  // `null` (no se pudo contar) NO es cero: abajo apaga el aviso en vez de
+  // decirle al dueño que va tranquilo. Ver `countPeriodBookings`.
+  const bookingsLoaded = subscription
+    ? await countPeriodBookings(
+        tenant.id,
+        subscription.currentPeriodStart.toISOString(),
+        subscription.currentPeriodEnd.toISOString(),
+      )
+    : null;
+
+  // El plan EFECTIVO, cortesía incluida: un negocio con premium de regalo
+  // tiene el techo de premium. Medirlo contra el plan pagado le avisaría a los
+  // 300 teniendo 5.000 disponibles.
+  const bookingCeiling = limitsFor(tenant.plan).bookingsPerMonth;
+  const ceilingState =
+    bookingsLoaded === null
+      ? null
+      : bookingCeilingState(tenant.plan, bookingsLoaded);
 
   const options: PlanOption[] = PLANS.map((plan) => {
     const limits = limitsFor(plan);
@@ -180,6 +210,30 @@ export default async function SuscripcionPage({
               "d 'de' MMMM",
               { locale: es },
             )}
+          </p>
+        )}
+
+        {/* EL TECHO NO BLOQUEA NADA. Es un freno anti-abuso puesto tan alto
+            que un negocio normal no lo toca, y llegar arriba no impide que
+            nadie reserve: al único que hay que avisarle es al dueño, que es
+            quien eligió el plan. Por eso el caso `over` aclara explícitamente
+            que la agenda sigue abierta — sin esa frase, el dueño sale a apagar
+            un incendio que no existe. */}
+        {ceilingState !== null && bookingsLoaded !== null && (
+          <p
+            className={
+              ceilingState === "under"
+                ? "mt-2 text-sm text-muted"
+                : "mt-2 rounded-lg border border-gold/30 bg-gold/10 px-3 py-2 text-sm text-foreground"
+            }
+          >
+            Cargaste <b>{bookingsLoaded}</b> de {bookingCeiling} turnos de tu
+            plan en este período.
+            {ceilingState === "near" && " Te queda poco margen."}
+            {ceilingState === "over" &&
+              " Tus clientes siguen pudiendo reservar con normalidad — el tope" +
+                " es nuestro, no de ellos. Si se repite, conviene mirar un plan" +
+                " más grande."}
           </p>
         )}
       </Card>
