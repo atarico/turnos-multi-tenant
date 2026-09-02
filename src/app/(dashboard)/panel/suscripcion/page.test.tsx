@@ -24,6 +24,7 @@ vi.mock("@/modules/tenants/application/queries", () => ({
 }));
 vi.mock("@/modules/billing/application/queries", () => ({
   getCurrentSubscription: vi.fn(async () => null),
+  countPeriodBookings: vi.fn(async () => null),
 }));
 vi.mock("@/modules/billing/application/actions", () => ({
   startCheckoutAction: vi.fn(),
@@ -339,5 +340,87 @@ describe("SuscripcionPage", () => {
         expect(screen.queryByText(/1 de septiembre/i)).toBeNull();
       },
     );
+  });
+
+  /**
+   * El techo de turnos del período.
+   *
+   * Es un freno ANTI-ABUSO, no una palanca de venta: está tan alto que un
+   * negocio normal no lo toca. Por eso lo único que hace es AVISARLE AL DUEÑO
+   * —que es quien eligió el plan— y NO bloquea a nadie que quiera reservar.
+   *
+   * Se cuenta por carga y no por fecha del turno; el porqué vive en
+   * `bookingCeilingState` y en la migración.
+   */
+  describe("techo de turnos", () => {
+    async function conTurnos(
+      cargados: number | null,
+      negocio: Tenant = tenant,
+    ) {
+      const { getCurrentSubscription, countPeriodBookings } = await import(
+        "@/modules/billing/application/queries"
+      );
+      vi.mocked(getCurrentSubscription).mockResolvedValue(subscription());
+      vi.mocked(countPeriodBookings).mockResolvedValue(cargados);
+      await renderPage({}, negocio);
+    }
+
+    /**
+     * El aviso completo, como párrafo.
+     *
+     * No sirve `getByText`: la cantidad va en un `<b>`, así que "Cargaste",
+     * "120" y "de 300 turnos" son tres nodos distintos y un matcher de texto
+     * plano no cruza esa frontera. Lo que se afirma es la FRASE, no el nodo.
+     */
+    function ceilingNotice(): HTMLElement | null {
+      return (
+        [...document.querySelectorAll("p")].find((el) =>
+          /turnos de tu plan/i.test(el.textContent ?? ""),
+        ) ?? null
+      );
+    }
+
+    it("dice cuántos turnos lleva cargados y cuántos permite el plan", { timeout: 15000 }, async () => {
+      await conTurnos(120);
+
+      // Básico son 300.
+      expect(ceilingNotice()).toHaveTextContent(/Cargaste 120 de 300 turnos/);
+    });
+
+    it("avisa cuando queda poco margen", { timeout: 15000 }, async () => {
+      await conTurnos(250);
+
+      expect(ceilingNotice()).toHaveTextContent(/te queda poco margen/i);
+    });
+
+    it("al pasarse aclara que los clientes SIGUEN pudiendo reservar", { timeout: 15000 }, async () => {
+      // Lo más importante de toda esta tajada. El dueño que ve "te pasaste"
+      // asume que su agenda se cerró y sale a apagar un incendio que no
+      // existe: el techo no bloquea ninguna reserva.
+      await conTurnos(310);
+
+      expect(ceilingNotice()).toHaveTextContent(/siguen pudiendo reservar/i);
+    });
+
+    it("cuando no se pudo contar NO muestra ningún número", { timeout: 15000 }, async () => {
+      // `null` es "no sabemos", no cero. Pintar "0 de 300" acá le diría al
+      // dueño que va tranquilo justo cuando no podemos afirmarlo.
+      await conTurnos(null);
+
+      expect(ceilingNotice()).toBeNull();
+    });
+
+    it("el techo es el del plan EFECTIVO, cortesía incluida", { timeout: 15000 }, async () => {
+      // Un negocio con premium de regalo tiene el techo de premium. Usar el
+      // plan pagado le avisaría a los 300 teniendo 5000 disponibles.
+      await conTurnos(400, {
+        ...tenant,
+        plan: "premium",
+        paid_plan: "basico",
+        plan_courtesy: "premium",
+      });
+
+      expect(ceilingNotice()).toHaveTextContent(/Cargaste 400 de 5000 turnos/);
+    });
   });
 });

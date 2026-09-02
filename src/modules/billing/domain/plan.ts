@@ -134,3 +134,49 @@ export function hasRoomForStaff(plan: PlanTier, activeStaff: number): boolean {
 export function isOverStaffLimit(plan: PlanTier, activeStaff: number): boolean {
   return activeStaff > limitsFor(plan).staff;
 }
+
+/**
+ * Cuán consumido está el techo de turnos del período.
+ *
+ * - `under`: el negocio va tranquilo, no hay nada que decirle.
+ * - `near`: consumió el 80% o más. Todavía le queda, pero conviene que lo sepa.
+ * - `over`: llegó al techo o lo pasó.
+ */
+export type BookingCeilingState = "under" | "near" | "over";
+
+/**
+ * A partir de qué fracción del techo se le avisa al dueño.
+ *
+ * 80% es el mismo umbral que el cupo de WhatsApp. Avisar antes convierte el
+ * aviso en ruido y el ruido se ignora; avisar después no le deja margen para
+ * hacer nada con la información.
+ */
+const CEILING_WARNING_RATIO = 0.8;
+
+/**
+ * En qué punto del techo de turnos está el período.
+ *
+ * `bookings` se cuenta por CARGA (`created_at`) y NO por fecha del turno. El
+ * techo existe para ver abuso: contando por `starts_at`, alguien que carga
+ * cincuenta mil turnos con fecha del año que viene no topearía ningún período
+ * nunca, que es justo el caso que hay que ver. Contar por carga puede avisar
+ * de más; no contar por carga no avisa nunca, y los dos errores no cuestan lo
+ * mismo — sobre todo cuando este aviso NO bloquea a nadie.
+ *
+ * Por el mismo motivo un turno cancelado cuenta: ya ocupó su fila. Cancelarlo
+ * después no devuelve lo que se gastó.
+ *
+ * Llegar justo al techo devuelve `over` y no `near`: consumir el cupo entero
+ * es el evento que hay que contar, y decirle "casi" a alguien que ya no tiene
+ * margen es decirle que le queda algo.
+ */
+export function bookingCeilingState(
+  plan: PlanTier,
+  bookings: number,
+): BookingCeilingState {
+  const ceiling = limitsFor(plan).bookingsPerMonth;
+
+  if (bookings >= ceiling) return "over";
+  if (bookings >= ceiling * CEILING_WARNING_RATIO) return "near";
+  return "under";
+}
