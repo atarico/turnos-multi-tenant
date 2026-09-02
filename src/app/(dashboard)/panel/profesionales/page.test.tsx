@@ -130,11 +130,19 @@ describe("StaffPage · cupo del plan", () => {
       render(await StaffPage());
 
       const notice = quotaNotice();
-      expect(notice).toHaveTextContent("3");
-      expect(notice).toHaveTextContent("2");
+      // La FRASE, no los números sueltos: afirmar "3" y "2" por separado no
+      // distingue "3 activos, permite 2" de la inversa, que es justo el error
+      // que arruinaría el aviso.
+      expect(notice).toHaveTextContent("Tenés 3 profesionales activos");
+      expect(notice).toHaveTextContent("permite 2");
       // Las dos cosas que tiene que contestar: qué NO pasa y qué sí.
       expect(notice).toHaveTextContent(/no sacamos a nadie/i);
       expect(notice).toHaveTextContent(/pausar/i);
+      // Al que quedó por encima también hay que darle la salida de arriba, no
+      // sólo la de pausar.
+      expect(
+        screen.getByRole("link", { name: "Cambiar de plan" }),
+      ).toHaveAttribute("href", "/panel/suscripcion");
     },
   );
 
@@ -159,6 +167,7 @@ describe("StaffPage · cupo del plan", () => {
 
       const notice = quotaNotice();
       expect(notice).toHaveTextContent(/tope/i);
+      expect(notice).toHaveTextContent("2 de 2 profesionales activos");
       // Estar lleno NO es haberse pasado: acá no corresponde el aviso del que
       // degradó, que habla de gente que ya no entra.
       expect(notice).not.toHaveTextContent(/no sacamos a nadie/i);
@@ -189,10 +198,39 @@ describe("StaffPage · cupo del plan", () => {
       render(await StaffPage());
 
       const notice = quotaNotice();
-      expect(notice).toHaveTextContent("1");
-      expect(notice).toHaveTextContent("2");
+      expect(notice).toHaveTextContent("1 de 2 profesionales activos");
       // Sin margen consumido no hay nada que ofrecer: un link a cambiar de
       // plan acá es venderle algo al que no lo necesita.
+      expect(screen.queryByRole("link", { name: "Cambiar de plan" })).toBeNull();
+    },
+  );
+
+  it(
+    "el tope sale del plan del negocio y no de un número fijo",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { listStaffMembers } = await import(
+        "@/modules/staff/application/queries"
+      );
+      // Premium permite 15. Con tres activos va holgado — el MISMO conteo que
+      // en Básico lo dejaría por encima del tope.
+      vi.mocked(getCurrentTenant).mockResolvedValue({
+        ...tenant,
+        plan: "premium",
+        paid_plan: "premium",
+      });
+      vi.mocked(listStaffMembers).mockResolvedValue({
+        ok: true,
+        value: [member("a", true), member("b", true), member("c", true)],
+      });
+      const { default: StaffPage } = await import("./page");
+
+      render(await StaffPage());
+
+      expect(quotaNotice()).toHaveTextContent("3 de 15 profesionales activos");
       expect(screen.queryByRole("link", { name: "Cambiar de plan" })).toBeNull();
     },
   );
