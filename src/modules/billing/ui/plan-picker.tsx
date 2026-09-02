@@ -1,12 +1,13 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Clock, Loader2, Minus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ActionState, idleState } from "@/core/action";
+import { cn } from "@/lib/utils/cn";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 
 /**
@@ -112,13 +113,17 @@ export function PlanPicker({
                   {option.staff === 1 ? "profesional" : "profesionales"}
                 </Feature>
                 <Feature>
-                  {option.whatsappMessages > 0
-                    ? `${option.whatsappMessages} mensajes de WhatsApp`
-                    : "Sin WhatsApp"}
-                </Feature>
-                <Feature>
                   Hasta {option.bookingsPerMonth} turnos por mes
                 </Feature>
+                {/* Último de la lista y sin tilde: lo que todavía no se
+                    entrega no puede leerse igual que lo que sí. */}
+                {option.whatsappMessages > 0 ? (
+                  <Feature kind="soon">
+                    {option.whatsappMessages} mensajes de WhatsApp
+                  </Feature>
+                ) : (
+                  <Feature kind="excluded">Sin WhatsApp</Feature>
+                )}
               </ul>
 
               <form action={action} className="mt-5">
@@ -151,11 +156,47 @@ export function PlanPicker({
   );
 }
 
-function Feature({ children }: { children: React.ReactNode }) {
+/**
+ * En qué estado está lo que la tarjeta enumera.
+ *
+ * - `included`: funciona hoy. Se lo paga y se lo usa.
+ * - `soon`: está vendido y todavía no existe. WhatsApp es el último punto de
+ *   la hoja de ruta y no hay una sola línea que mande un mensaje.
+ * - `excluded`: el plan no lo incluye y no lo va a incluir.
+ *
+ * La distinción entre los dos últimos no es cosmética: a uno le llega el día
+ * que se construya, al otro no le llega nunca.
+ */
+type FeatureKind = "included" | "soon" | "excluded";
+
+const FEATURE_STYLES: Record<
+  FeatureKind,
+  { Icon: typeof Check; icon: string; text: string }
+> = {
+  included: { Icon: Check, icon: "text-gold", text: "" },
+  soon: { Icon: Clock, icon: "text-faint", text: "text-faint" },
+  excluded: { Icon: Minus, icon: "text-faint", text: "text-faint" },
+};
+
+function Feature({
+  kind = "included",
+  children,
+}: {
+  kind?: FeatureKind;
+  children: React.ReactNode;
+}) {
+  const variant = FEATURE_STYLES[kind];
+
   return (
     <li className="flex items-start gap-2">
-      <Check className="mt-0.5 size-4 shrink-0 text-gold" />
-      <span>{children}</span>
+      {/* La tilde dorada es una promesa. Sobre algo que no existe todavía es
+          una promesa que no podemos cumplir, y quien la lee está a un clic de
+          poner la tarjeta — así que ahí va un reloj, no una tilde. */}
+      <variant.Icon className={cn("mt-0.5 size-4 shrink-0", variant.icon)} />
+      <span className={cn("flex flex-wrap items-center gap-x-2", variant.text)}>
+        {children}
+        {kind === "soon" && <Badge variant="muted">Próximamente</Badge>}
+      </span>
     </li>
   );
 }
