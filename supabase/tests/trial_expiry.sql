@@ -95,7 +95,11 @@ end $$;
 -- ------------------------------------------------------------
 create or replace function pg_temp.set_subscription(
   p_status text,
-  p_trial_ends interval
+  p_trial_ends interval,
+  -- Hasta cuándo está PAGO. Por defecto futuro, que es el caso de casi todos
+  -- los casos de este archivo: lo que se está probando acá es la prueba, no el
+  -- período. Lo mueve sólo el caso 6, donde el período ES la variable.
+  p_period_end interval default interval '30 days'
 ) returns void language plpgsql as $$
 declare
   v record;
@@ -113,7 +117,9 @@ begin
     current_period_start, current_period_end, trial_ends_at, price_usd_cents
   ) values (
     v.tenant_id, 'basico', p_status::public.subscription_status,
-    now(), now() + interval '30 days',
+    -- Arranca bien atrás para que `p_period_end` pueda ser pasado sin violar
+    -- el check `current_period_end > current_period_start`.
+    now() - interval '60 days', now() + p_period_end,
     case when p_trial_ends is null then null else now() + p_trial_ends end,
     0
   );
@@ -223,17 +229,27 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 6: una cancelada no reserva, ni con fecha de prueba en el futuro.
+-- Caso 6: una cancelada CON EL PERÍODO YA VENCIDO no reserva.
 --
--- Es el estado de quien se dio de baja el mismo día que se dio de alta: le
--- queda `trial_ends_at` futuro y una suscripción muerta. Manda el estado.
+-- Ojo con lo que este caso dice y lo que NO dice, porque cambió en
+-- 20260904120001. Una baja YA NO congela por el estado: congela cuando se le
+-- termina lo pagado. La baja corta el cobro, no el servicio, así que quien
+-- pagó hasta el 30 y se dio de baja el 5 sigue reservando hasta el 30.
+--
+-- Por eso acá el período se manda VENCIDO, y por eso el `trial_ends_at` futuro
+-- sigue siendo parte del caso: prueba que una fecha de prueba en el futuro no
+-- resucita una suscripción muerta cuyo período ya pasó.
+--
+-- La mitad positiva —baja con período vigente que SÍ reserva— vive en
+-- `cancel_subscription.sql`, caso 3, que es donde está su migración.
 -- ------------------------------------------------------------
 do $$
 begin
-  perform pg_temp.set_subscription('canceled', interval '7 days');
+  perform pg_temp.set_subscription('canceled', interval '7 days', interval '-1 day');
 
   if pg_temp.books_ok('Cancelado') then
-    raise exception 'CASO 6: una suscripción CANCELADA habilitó la reserva.';
+    raise exception
+      'CASO 6: una cancelada con el período VENCIDO habilitó la reserva.';
   end if;
 end $$;
 
