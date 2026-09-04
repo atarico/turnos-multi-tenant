@@ -4,7 +4,7 @@ import { idleState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
 
-import { startCheckoutAction } from "./actions";
+import { cancelSubscriptionAction, startCheckoutAction } from "./actions";
 
 /**
  * Tests de la Server Action del checkout.
@@ -18,6 +18,8 @@ const redirect = throwingRedirectSpy();
 vi.mock("next/navigation", () => ({ redirect: (path: string) => redirect(path) }));
 
 vi.mock("./checkout", () => ({ startCheckout: vi.fn() }));
+vi.mock("./cancel", () => ({ cancelSubscription: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/modules/tenants/application/queries", () => ({
   getCurrentTenant: vi.fn(),
 }));
@@ -31,6 +33,8 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 const { startCheckout } = await import("./checkout");
+const { cancelSubscription } = await import("./cancel");
+const { revalidatePath } = await import("next/cache");
 const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
 
 const TENANT = { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", slug: "mi-negocio" };
@@ -159,5 +163,93 @@ describe("startCheckoutAction", () => {
       message: "Escribinos antes de volver a intentar.",
     });
     expect(redirect).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Tests de la Server Action de la baja.
+ *
+ * Lo que se cuida es que el negocio salga SIEMPRE de la sesión y nunca del
+ * formulario. Esta action es alcanzable por POST directo: si aceptara un
+ * `tenant_id` de afuera, cualquiera con una cuenta daría de baja el negocio de
+ * otro, y del lado SQL no hay red de contención — `cancel_subscription()` mira
+ * el parámetro que le pasan, por eso está grantada sólo a `service_role`.
+ */
+describe("cancelSubscriptionAction", () => {
+  beforeEach(() => {
+    vi.mocked(getCurrentTenant).mockResolvedValue(TENANT as never);
+    vi.mocked(cancelSubscription).mockResolvedValue(ok("canceled"));
+  });
+
+  it("da de baja la suscripción del negocio de la sesión", async () => {
+    await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(cancelSubscription).toHaveBeenCalledWith(TENANT.id);
+  });
+
+  /**
+   * EL TEST QUE IMPORTA. Un `tenant_id` en el formulario se ignora: el negocio
+   * sale de la sesión y de ningún otro lado.
+   */
+  it("ignora el negocio que venga en el formulario", async () => {
+    const data = new FormData();
+    data.set("tenant_id", "11111111-1111-1111-1111-111111111111");
+
+    await cancelSubscriptionAction(idleState, data);
+
+    expect(cancelSubscription).toHaveBeenCalledWith(TENANT.id);
+  });
+
+  it("sin negocio no da de baja nada", async () => {
+    vi.mocked(getCurrentTenant).mockResolvedValue(null);
+
+    const state = await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(state.status).toBe("error");
+    expect(cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it("avisa que quedó dada de baja", async () => {
+    const state = await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(state.status).toBe("success");
+  });
+
+  /**
+   * Una segunda baja es éxito y no error: el botón se aprieta dos veces, o el
+   * webhook se adelantó. Decirle que falló lo manda a reintentar algo hecho.
+   */
+  it("una segunda baja también es éxito", async () => {
+    vi.mocked(cancelSubscription).mockResolvedValue(ok("already_canceled"));
+
+    const state = await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(state.status).toBe("success");
+  });
+
+  /**
+   * El mensaje viaja TAL CUAL, que es la convención del repo. Reemplazarlo por
+   * uno genérico perdería justo lo que distingue "no se te va a cobrar más
+   * pero no lo registramos" de "no se pudo dar de baja" — dos situaciones que
+   * piden cosas distintas del dueño.
+   */
+  it("deja pasar el mensaje del error sin reescribirlo", async () => {
+    vi.mocked(cancelSubscription).mockResolvedValue(
+      err(appError("cancel_not_recorded", "no se te va a cobrar más, pero...")),
+    );
+
+    const state = await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(state.status).toBe("error");
+    if (state.status === "error") {
+      expect(state.message).toBe("no se te va a cobrar más, pero...");
+    }
+  });
+
+  /** La pantalla tiene que reflejar la baja sin que el dueño recargue. */
+  it("revalida la pantalla de suscripción", async () => {
+    await cancelSubscriptionAction(idleState, new FormData());
+
+    expect(revalidatePath).toHaveBeenCalledWith("/panel/suscripcion");
   });
 });
