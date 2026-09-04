@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SubscriptionRow } from "../domain/subscription-mapper";
 
-import { countPeriodBookings, getCurrentSubscription } from "./queries";
+import {
+  countPeriodBookings,
+  getCurrentSubscription,
+  getLiveSubscriptionIdForCharge,
+} from "./queries";
 
 /**
  * Tests de `getCurrentSubscription`.
@@ -21,6 +25,8 @@ const from = vi.fn();
 const select = vi.fn();
 const eq = vi.fn();
 const inFilter = vi.fn();
+const order = vi.fn();
+const limit = vi.fn();
 
 function chain() {
   const builder: Record<string, unknown> = {};
@@ -30,6 +36,14 @@ function chain() {
   };
   builder.in = (...args: unknown[]) => {
     inFilter(...args);
+    return builder;
+  };
+  builder.order = (...args: unknown[]) => {
+    order(...args);
+    return builder;
+  };
+  builder.limit = (...args: unknown[]) => {
+    limit(...args);
     return builder;
   };
   builder.maybeSingle = async () => result;
@@ -115,13 +129,42 @@ describe("getCurrentSubscription", () => {
   });
 
   /**
-   * El filtro de estados es lo ÚNICO que impide que una suscripción cancelada
-   * se lea como viva. Tiene que incluir `past_due`: el cobro falló pero el
-   * servicio sigue andando durante la gracia, y dejarlo afuera cortaría el
-   * acceso por una tarjeta vencida.
+   * NO FILTRA POR ESTADO, y ese es el cambio que trajo la baja.
+   *
+   * Filtrando por estados vivos, un negocio que se dio de baja leía `null` —
+   * indistinguible de no tener suscripción— y las dos pantallas que dependen
+   * de esto quedaban mintiendo: el panel no podía decirle hasta cuándo le
+   * queda servicio, y `nueva-reserva` volvía a mostrarle el formulario cuando
+   * el período venciera, para que la base se lo rechazara al enviar.
+   *
+   * Quién decide qué significa cada estado es el dominio (`takesNewBookings`),
+   * no esta consulta. Acá se trae el HECHO; allá se lo juzga.
+   *
+   * El que sí conserva su filtro estricto es `getLiveSubscriptionIdForCharge`,
+   * y por eso existe aparte: cobrar sobre una suscripción dada de baja es
+   * exactamente lo que no puede pasar.
    */
-  it("sólo trae suscripciones vivas, y past_due cuenta como viva", async () => {
+  it("trae la suscripción sin filtrar por estado", async () => {
     await getCurrentSubscription("tenant-1");
+
+    expect(inFilter).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Y trae LA MÁS NUEVA. Hoy hay una sola fila por negocio, pero el índice
+   * único parcial sólo prohíbe dos VIVAS: una baja más un alta nueva son dos
+   * filas legales, y sin este orden `maybeSingle()` se rompería o devolvería
+   * la vieja.
+   */
+  it("trae la más reciente, una sola", async () => {
+    await getCurrentSubscription("tenant-1");
+
+    expect(order).toHaveBeenCalledWith("created_at", { ascending: false });
+    expect(limit).toHaveBeenCalledWith(1);
+  });
+
+  it("el cobro sigue exigiendo una suscripción VIVA, y past_due cuenta como viva", async () => {
+    await getLiveSubscriptionIdForCharge("tenant-1");
 
     expect(inFilter).toHaveBeenCalledWith("status", [
       "trialing",
