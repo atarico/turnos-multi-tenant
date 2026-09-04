@@ -55,4 +55,14 @@ export interface PublicTenant {
   timezone: string;
   brandColor: string;
   logoUrl: string | null;
+  /**
+   * ¿Está tomando reservas online?
+   *
+   * Un booleano y nada más: si está en prueba, atrasado o cancelado no es
+   * asunto de quien entra a sacar un turno. Lo calcula la vista
+   * `public_tenants` con `tenant_takes_bookings()`, no la app — la RLS de
+   * `subscriptions` sólo deja ver la suscripción a los miembros del negocio, y
+   * un visitante no es miembro de nada.
+   */
+  takesBookings: boolean;
 }
