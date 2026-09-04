@@ -28,6 +28,7 @@ vi.mock("@/modules/billing/application/queries", () => ({
 }));
 vi.mock("@/modules/billing/application/actions", () => ({
   startCheckoutAction: vi.fn(),
+  cancelSubscriptionAction: vi.fn(),
 }));
 
 const tenant: Tenant = {
@@ -66,14 +67,28 @@ const subscription = (over: Partial<Subscription> = {}): Subscription => ({
   ...over,
 });
 
+/**
+ * `undefined` en `suscripcion` deja el mock como esté — hay tests que lo
+ * configuran a mano antes de llamar. `null` lo pisa explícitamente con "este
+ * negocio no tiene suscripción", que es un caso distinto y hay que poder
+ * pedirlo.
+ */
 async function renderPage(
   params: Record<string, string> = {},
   negocio: Tenant = tenant,
+  suscripcion?: Subscription | null,
 ) {
   const { getCurrentTenant } = await import(
     "@/modules/tenants/application/queries"
   );
   vi.mocked(getCurrentTenant).mockResolvedValue(negocio);
+
+  if (suscripcion !== undefined) {
+    const { getCurrentSubscription } = await import(
+      "@/modules/billing/application/queries"
+    );
+    vi.mocked(getCurrentSubscription).mockResolvedValue(suscripcion);
+  }
 
   const { default: Page } = await import("./page");
   render(await Page({ searchParams: Promise.resolve(params) }));
@@ -422,5 +437,110 @@ describe("SuscripcionPage", () => {
 
       expect(ceilingNotice()).toHaveTextContent(/Cargaste 400 de 5000 turnos/);
     });
+  });
+});
+
+/**
+ * La baja de suscripción en la pantalla.
+ *
+ * Dos cosas distintas viven acá: OFRECERLA cuando hay un cobro que cortar, y
+ * CONTAR el estado cuando ya se dio de baja. La segunda es la que evita el peor
+ * momento del producto — el dueño que canceló, entra al panel una semana
+ * después y no encuentra un solo rastro de lo que hizo.
+ */
+describe("baja de suscripción", () => {
+  it("la ofrece cuando hay un cobro abierto", async () => {
+    await renderPage({}, tenant, subscription({ status: "active" }));
+
+    expect(
+      screen.getByRole("button", { name: /dar de baja/i }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * `past_due` también: el cobro falló pero Mercado Pago lo sigue
+   * reintentando, así que hay un débito abierto que el dueño puede querer
+   * cortar. Esconder el botón justo ahí lo dejaría sin salida mientras le
+   * siguen intentando cobrar.
+   */
+  it("la ofrece con el cobro atrasado, que es cuando más se busca", async () => {
+    await renderPage({}, tenant, subscription({ status: "past_due" }));
+
+    expect(
+      screen.getByRole("button", { name: /dar de baja/i }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Durante la prueba NO se ofrece, y no es un olvido: no hay ningún cobro
+   * abierto que cancelar —nada convierte la prueba sola, el checkout es
+   * manual— así que un botón que promete "no se te va a cobrar más" estaría
+   * contestando una pregunta que nadie hizo.
+   */
+  it("no la ofrece durante la prueba, donde no hay nada que cobrar", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({ status: "trialing", trialEndsAt: new Date(Date.now() + 5 * DAY) }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("no la ofrece sin suscripción", async () => {
+    await renderPage({}, tenant, null);
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * EL CASO QUE EVITA EL PEOR MOMENTO DEL PRODUCTO. Ya dada de baja y con el
+   * período corriendo, la pantalla tiene que decir las dos cosas: que está
+   * dada de baja, y hasta cuándo sigue andando. Sin la segunda, el dueño cree
+   * que perdió el mes que pagó.
+   */
+  it("dada de baja, dice hasta cuándo sigue tomando turnos", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "canceled",
+        currentPeriodEnd: new Date("2026-09-30T12:00:00Z"),
+      }),
+    );
+
+    expect(screen.getByText(/diste de baja/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 de septiembre/)).toBeInTheDocument();
+  });
+
+  it("dada de baja no vuelve a ofrecer la baja", async () => {
+    await renderPage({}, tenant, subscription({ status: "canceled" }));
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * Y vencido el período cambia lo que dice, porque cambió lo que pasa: ya no
+   * entran turnos nuevos. Repetir el cartel de "seguís hasta el 30" una semana
+   * después del 30 sería mentirle mientras la base le rechaza las reservas.
+   */
+  it("con el período ya vencido dice que no entran turnos nuevos", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "canceled",
+        currentPeriodStart: new Date(Date.now() - 60 * DAY),
+        currentPeriodEnd: new Date(Date.now() - DAY),
+      }),
+    );
+
+    expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
   });
 });

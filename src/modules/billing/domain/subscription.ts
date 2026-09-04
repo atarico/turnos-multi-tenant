@@ -45,6 +45,20 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 type TrialView = Pick<Subscription, "status" | "trialEndsAt">;
 
 /**
+ * Lo mínimo para responder si el negocio puede recibir turnos.
+ *
+ * Pide `currentPeriodEnd` además de la prueba porque una suscripción dada de
+ * baja sigue habilitando hasta que se le termine lo pagado, y esa fecha es la
+ * única que lo sabe. Es un tipo aparte de `TrialView` y no un campo más
+ * encima: `isInTrial` y `trialDaysLeft` no tienen nada que hacer con el
+ * período, y pedirles un dato que no usan invita a que alguien lo mire.
+ */
+type AccessView = Pick<
+  Subscription,
+  "status" | "trialEndsAt" | "currentPeriodEnd"
+>;
+
+/**
  * ¿Está corriendo la prueba gratis?
  *
  * Pide las dos cosas: que el estado sea `trialing` Y que la fecha no haya
@@ -90,10 +104,11 @@ export function trialDaysLeft(subscription: TrialView, now: Date): number {
  * dueño logueado le puede pegar a PostgREST directo y saltearse todo este
  * archivo. Acá se decide qué MOSTRAR; allá se decide qué ENTRA. Las dos tienen
  * que dar la misma respuesta o el dueño llena un formulario para que la base
- * se lo rechace. Ver `public.tenant_takes_bookings()`.
+ * se lo rechace. Ver `public.tenant_takes_bookings()`, reescrita por
+ * `20260904120001_cancel_subscription.sql`.
  */
 export function takesNewBookings(
-  subscription: TrialView | null,
+  subscription: AccessView | null,
   now: Date,
 ): boolean {
   if (!subscription) return false;
@@ -102,7 +117,29 @@ export function takesNewBookings(
   // de `trialing` cuando se cumple el plazo. Ver `isInTrial`.
   if (subscription.status === "trialing") return isInTrial(subscription, now);
 
+  /**
+   * LA BAJA CORTA EL COBRO, NO EL SERVICIO.
+   *
+   * Quien pagó hasta fin de mes y se da de baja hoy sigue tomando turnos hasta
+   * esa fecha: cobrarle el mes y sacárselo el día que avisa que se va es
+   * quedarse con plata por un servicio que no se prestó. Y de paso vuelve
+   * tranquilo un botón que tiene que serlo — el que no puede salir sin perder
+   * lo pagado, no entra.
+   *
+   * Vencido el período se congela SOLO, sin proceso que lo apague: la fila se
+   * queda como está y esta comparación deja de dar true. Mismo mecanismo con
+   * el que vence la prueba.
+   */
+  if (subscription.status === "canceled") {
+    return subscription.currentPeriodEnd.getTime() > now.getTime();
+  }
+
   // `past_due` entra: el cobro falló pero Mercado Pago lo sigue reintentando y
   // el servicio anda durante la gracia. Espeja `LIVE_STATUSES`.
+  //
+  // Y no mira el período a propósito, a diferencia de la baja: acá la
+  // suscripción está VIVA y quien decide si sigue cobrando es Mercado Pago. Un
+  // `current_period_end` pasado en un `active` significa que el cobro todavía
+  // no rotó el período, no que se haya terminado el servicio.
   return subscription.status === "active" || subscription.status === "past_due";
 }

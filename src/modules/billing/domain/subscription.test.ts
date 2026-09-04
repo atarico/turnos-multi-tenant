@@ -14,11 +14,38 @@ import { isInTrial, takesNewBookings, trialDaysLeft } from "./subscription";
 
 const NOW = new Date("2026-08-17T12:00:00Z");
 
-/** Una suscripción en prueba que vence dentro de `days` días. */
+/** Un instante a `days` días de `NOW`. Negativo = pasado. */
+function daysFromNow(days: number): Date {
+  const date = new Date(NOW);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date;
+}
+
+/**
+ * Una suscripción en prueba que vence dentro de `days` días.
+ *
+ * `currentPeriodEnd` sale con la MISMA fecha que `trialEndsAt`, y no es para
+ * llenar el campo: es lo que hace `create_business`, que abre la fila con
+ * `current_period_end = trial_ends_at`. La prueba ES el período pago, y de esa
+ * equivalencia depende que darse de baja durante la prueba deje terminarla sin
+ * un caso especial.
+ */
 function trialEndingIn(days: number) {
-  const trialEndsAt = new Date(NOW);
-  trialEndsAt.setUTCDate(trialEndsAt.getUTCDate() + days);
-  return { status: "trialing" as const, trialEndsAt };
+  const trialEndsAt = daysFromNow(days);
+  return {
+    status: "trialing" as const,
+    trialEndsAt,
+    currentPeriodEnd: trialEndsAt,
+  };
+}
+
+/** Una baja cuyo período pago termina en `days` días. Negativo = ya venció. */
+function canceledWithPeriodEndingIn(days: number) {
+  return {
+    status: "canceled" as const,
+    trialEndsAt: null,
+    currentPeriodEnd: daysFromNow(days),
+  };
 }
 
 describe("isInTrial", () => {
@@ -77,14 +104,15 @@ describe("trialDaysLeft", () => {
 
 /**
  * `takesNewBookings` ESPEJA a `public.tenant_takes_bookings()`, en
- * `20260903120001_trial_expiry_blocks_new_bookings.sql`. Las dos existen a
+ * `20260904120001_cancel_subscription.sql` (que reescribió la de
+ * `20260903120001`). Las dos existen a
  * propósito y responden lo mismo por razones distintas: la de la base es la
  * que FRENA —adentro de `create_booking()`, donde ni un dueño pegándole a
  * PostgREST directo la puede saltear—, y esta es la que AVISA, para que el
  * panel y la página pública no muestren un formulario que la base va a
  * rechazar. Si una cambia sin la otra, el usuario llena el formulario y recién
  * ahí se entera. Cualquier caso que se agregue acá va también al test SQL
- * `supabase/tests/trial_expiry.sql`.
+ * `supabase/tests/cancel_subscription.sql`.
  */
 describe("takesNewBookings", () => {
   it("durante la prueba sí toma turnos", () => {
@@ -102,21 +130,30 @@ describe("takesNewBookings", () => {
   });
 
   it("no toma turnos justo en el instante en que vence la prueba", () => {
-    expect(takesNewBookings({ status: "trialing", trialEndsAt: NOW }, NOW)).toBe(
-      false,
-    );
+    expect(
+      takesNewBookings(
+        { status: "trialing", trialEndsAt: NOW, currentPeriodEnd: NOW },
+        NOW,
+      ),
+    ).toBe(false);
   });
 
   it("una prueba sin fecha de vencimiento no habilita nada", () => {
     expect(
-      takesNewBookings({ status: "trialing", trialEndsAt: null }, NOW),
+      takesNewBookings(
+        { status: "trialing", trialEndsAt: null, currentPeriodEnd: daysFromNow(5) },
+        NOW,
+      ),
     ).toBe(false);
   });
 
   it("una suscripción paga toma turnos", () => {
-    expect(takesNewBookings({ status: "active", trialEndsAt: null }, NOW)).toBe(
-      true,
-    );
+    expect(
+      takesNewBookings(
+        { status: "active", trialEndsAt: null, currentPeriodEnd: daysFromNow(25) },
+        NOW,
+      ),
+    ).toBe(true);
   });
 
   /**
@@ -127,19 +164,55 @@ describe("takesNewBookings", () => {
    */
   it("un cobro atrasado sigue tomando turnos durante la gracia", () => {
     expect(
-      takesNewBookings({ status: "past_due", trialEndsAt: null }, NOW),
+      takesNewBookings(
+        { status: "past_due", trialEndsAt: null, currentPeriodEnd: daysFromNow(-1) },
+        NOW,
+      ),
     ).toBe(true);
   });
 
   /**
-   * Y la fecha de prueba NO revive a una cancelada: alguien que canceló el
-   * mismo día que se dio de alta tiene `trial_ends_at` en el futuro y una
-   * suscripción muerta. Manda el estado.
+   * LA BAJA CORTA EL COBRO, NO EL SERVICIO. Quien pagó hasta fin de mes y se
+   * da de baja hoy sigue tomando turnos hasta que ese período termine:
+   * cobrarle el mes y sacárselo el día que avisa que se va es quedarse con
+   * plata por un servicio que no se prestó.
    */
-  it("una cancelada no toma turnos ni con fecha de prueba futura", () => {
+  it("una baja con el período pago todavía corriendo sigue tomando turnos", () => {
+    expect(takesNewBookings(canceledWithPeriodEndingIn(25), NOW)).toBe(true);
+  });
+
+  /**
+   * Y el espejo, que es lo que hace que la regla de arriba no sea un regalo
+   * eterno: vencido el período, se congela solo. Nada tiene que correr — la
+   * fila se queda como está y la comparación con `now()` deja de dar true.
+   */
+  it("una baja con el período ya vencido no toma turnos", () => {
+    expect(takesNewBookings(canceledWithPeriodEndingIn(-1), NOW)).toBe(false);
+  });
+
+  it("no toma turnos justo en el instante en que termina el período de una baja", () => {
     expect(
       takesNewBookings(
-        { status: "canceled", trialEndsAt: trialEndingIn(5).trialEndsAt },
+        { status: "canceled", trialEndsAt: null, currentPeriodEnd: NOW },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * Y la fecha de prueba NO revive a una baja cuyo período ya pasó. Es el
+   * estado de quien canceló el mismo día que se dio de alta y volvió meses
+   * después: `trial_ends_at` quedó en el futuro respecto de su alta, pero lo
+   * que manda es hasta cuándo está pago.
+   */
+  it("una baja con el período vencido no revive por una fecha de prueba futura", () => {
+    expect(
+      takesNewBookings(
+        {
+          status: "canceled",
+          trialEndsAt: daysFromNow(5),
+          currentPeriodEnd: daysFromNow(-1),
+        },
         NOW,
       ),
     ).toBe(false);
