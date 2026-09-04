@@ -7,7 +7,10 @@ import { es } from "date-fns/locale";
 import { ArrowLeft, Gift } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
-import { startCheckoutAction } from "@/modules/billing/application/actions";
+import {
+  cancelSubscriptionAction,
+  startCheckoutAction,
+} from "@/modules/billing/application/actions";
 import {
   countPeriodBookings,
   getCurrentSubscription,
@@ -22,6 +25,7 @@ import {
   isInTrial,
   trialDaysLeft,
 } from "@/modules/billing/domain/subscription";
+import { CancelSubscription } from "@/modules/billing/ui/cancel-subscription";
 import { PlanPicker, type PlanOption } from "@/modules/billing/ui/plan-picker";
 import { formatPrice } from "@/modules/catalog/domain/money";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
@@ -82,6 +86,35 @@ export default async function SuscripcionPage({
     subscription && isInTrial(subscription, now)
       ? trialDaysLeft(subscription, now)
       : 0;
+
+  /**
+   * Hasta cuándo sigue tomando turnos, en la zona del NEGOCIO.
+   *
+   * Es una fecha sobre la que el dueño va a tomar una decisión —dar de baja o
+   * no—, y en el borde del mes la zona del servidor y la suya caen en meses
+   * distintos. Mismo criterio que el "próximo cobro" de más arriba: un
+   * INSTANTE se cuenta desde donde está parado el que lo mira.
+   */
+  const servesUntil = subscription
+    ? format(
+        new TZDate(subscription.currentPeriodEnd, tenant.timezone),
+        "d 'de' MMMM",
+        { locale: es },
+      )
+    : "";
+
+  // Sólo se ofrece la baja cuando hay un cobro que cortar. Durante la prueba
+  // no hay ninguno —nada la convierte sola, el checkout es manual—, así que un
+  // botón que promete "no se te va a cobrar más" contestaría una pregunta que
+  // nadie hizo.
+  const canCancel = paying;
+
+  const canceled = subscription?.status === "canceled";
+  // Y una baja con el período todavía corriendo NO es lo mismo que una vencida:
+  // en la primera sigue entrando trabajo, en la segunda no. Decir lo mismo en
+  // las dos es mentirle a una de las dos.
+  const stillServed =
+    canceled && subscription.currentPeriodEnd.getTime() > now.getTime();
 
   // El techo se mide contra el período de la suscripción, no contra el mes
   // civil: es la ventana que el negocio efectivamente pagó, y arranca el día
@@ -144,6 +177,28 @@ export default async function SuscripcionPage({
           Recibimos tu suscripción. La activación se confirma cuando Mercado
           Pago nos avise que el cobro entró, y eso puede tardar unos minutos.
           Vas a ver el plan nuevo acá mismo.
+        </p>
+      )}
+
+      {/* LA BAJA, CONTADA. Sin este cartel el dueño que canceló entra una
+          semana después y no encuentra un solo rastro de lo que hizo — y si
+          además le quedaba mes pago, cree que lo perdió. */}
+      {canceled && (
+        <p className="mt-4 rounded-xl border border-border bg-surface-2 px-3.5 py-3 text-sm text-muted">
+          {stillServed ? (
+            <>
+              Diste de baja tu suscripción, así que no se te va a cobrar más.
+              Seguís tomando turnos hasta el <b>{servesUntil}</b>, y tu agenda
+              queda intacta.
+            </>
+          ) : (
+            <>
+              Diste de baja tu suscripción y el período que habías pagado
+              terminó, así que <b>no estás tomando turnos nuevos</b>. Tu agenda
+              sigue ahí: podés verla, cerrarla y reprogramarla. Para volver a
+              recibir reservas, elegí un plan.
+            </>
+          )}
         </p>
       )}
 
@@ -251,6 +306,15 @@ export default async function SuscripcionPage({
         paying={paying}
         start={startCheckoutAction}
       />
+
+      {/* Al final y sin destacar, que es donde va la salida: tiene que estar
+          y tiene que encontrarse, no tiene que competir con los planes. */}
+      {canCancel && (
+        <CancelSubscription
+          cancel={cancelSubscriptionAction}
+          servesUntil={servesUntil}
+        />
+      )}
     </div>
   );
 }
