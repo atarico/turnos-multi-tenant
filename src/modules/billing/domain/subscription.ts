@@ -70,3 +70,39 @@ export function trialDaysLeft(subscription: TrialView, now: Date): number {
   const remaining = subscription.trialEndsAt!.getTime() - now.getTime();
   return Math.ceil(remaining / MS_PER_DAY);
 }
+
+/**
+ * ¿El negocio puede recibir turnos NUEVOS?
+ *
+ * Es la única pregunta que decide si se le muestra el formulario de reserva,
+ * en el panel y en la página pública. No decide nada más: la agenda que ya
+ * tiene se sigue viendo, cerrando y reprogramando. Perder turnos ya tomados
+ * —o no poder avisarle a un cliente que no lo pueden atender— sería un daño
+ * al cliente del negocio por una deuda del negocio.
+ *
+ * `null` es NO, y conviene decir por qué no es una decisión conservadora al
+ * voleo: `create_business` abre la suscripción en la misma transacción que el
+ * negocio, y `20260817120002` le dio una a cada negocio que ya existía. Un
+ * negocio sin suscripción viva no es un negocio nuevo, es un estado roto.
+ *
+ * ESTA FUNCIÓN NO ES EL FRENO. El freno vive en `create_booking()`, del lado
+ * de la base — `create_booking` sigue grantada a `authenticated`, así que un
+ * dueño logueado le puede pegar a PostgREST directo y saltearse todo este
+ * archivo. Acá se decide qué MOSTRAR; allá se decide qué ENTRA. Las dos tienen
+ * que dar la misma respuesta o el dueño llena un formulario para que la base
+ * se lo rechace. Ver `public.tenant_takes_bookings()`.
+ */
+export function takesNewBookings(
+  subscription: TrialView | null,
+  now: Date,
+): boolean {
+  if (!subscription) return false;
+
+  // La prueba se mide por la FECHA, no por la etiqueta: nada mueve el estado
+  // de `trialing` cuando se cumple el plazo. Ver `isInTrial`.
+  if (subscription.status === "trialing") return isInTrial(subscription, now);
+
+  // `past_due` entra: el cobro falló pero Mercado Pago lo sigue reintentando y
+  // el servicio anda durante la gracia. Espeja `LIVE_STATUSES`.
+  return subscription.status === "active" || subscription.status === "past_due";
+}

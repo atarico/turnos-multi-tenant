@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { friendlyBookingError, friendlyRescheduleError } from "./booking-errors";
+import {
+  friendlyBookingError,
+  friendlyOwnerBookingError,
+  friendlyRescheduleError,
+} from "./booking-errors";
 
 describe("friendlyBookingError", () => {
   it.each([
@@ -82,6 +86,95 @@ describe("friendlyRescheduleError", () => {
   it("falls back to a reschedule-specific message, not the create one", () => {
     expect(friendlyRescheduleError("connection reset by peer")).toBe(
       "No pudimos reprogramar el turno. Intentá de nuevo.",
+    );
+  });
+});
+
+/**
+ * El rechazo por plan vencido es el MISMO error de la base para los dos
+ * caminos, y tiene que leerse distinto según quién esté del otro lado. Estos
+ * casos existen para que nadie unifique los dos textos "porque es el mismo
+ * error": lo es del lado de Postgres, no del lado de quien lo lee.
+ */
+describe("negocio sin plan activo", () => {
+  it("al visitante le dice qué pasa, sin contarle por qué", () => {
+    const message = friendlyBookingError("Negocio sin plan activo");
+
+    expect(message).toBe(
+      "Este negocio no está tomando reservas online por ahora. Escribile directo para coordinar.",
+    );
+  });
+
+  /**
+   * Lo que el negocio debe, cuánto y desde cuándo no es asunto del visitante.
+   * La vista `public_tenants` se cuida de no exponer el plan ni el estado;
+   * filtrarlo acá por un mensaje de error sería entregar por la puerta de
+   * adelante lo mismo que la base protege.
+   */
+  it.each(["prueba", "plan", "venci", "pag", "suscrip"])(
+    "el mensaje del visitante no menciona %s",
+    (leak) => {
+      expect(
+        friendlyBookingError("Negocio sin plan activo").toLowerCase(),
+      ).not.toContain(leak);
+    },
+  );
+
+  it("al dueño le dice qué pasó y dónde se arregla", () => {
+    const message = friendlyOwnerBookingError("Negocio sin plan activo");
+
+    expect(message).toContain("no tiene un plan activo");
+    expect(message).toContain("Suscripción");
+  });
+
+  /**
+   * `tenant_takes_bookings()` rechaza por igual la prueba vencida, la
+   * suscripción cancelada y la ausencia de suscripción, y los tres llegan con
+   * el MISMO string. Nombrar la prueba sería mentirle a dos de los tres: a
+   * quien canceló el mes pasado, "se te terminó la prueba gratis" le describe
+   * algo que no pasó y lo manda a buscar una prueba que ya no existe.
+   */
+  it("el mensaje del dueño no nombra la prueba, que es sólo una de las tres causas", () => {
+    expect(
+      friendlyOwnerBookingError("Negocio sin plan activo").toLowerCase(),
+    ).not.toContain("prueba");
+  });
+
+  /**
+   * Lo primero que piensa un dueño al ver que no entran turnos es que perdió la
+   * agenda. Decírselo en el mismo mensaje es la diferencia entre un susto y un
+   * trámite.
+   */
+  it("al dueño le aclara que no perdió la agenda", () => {
+    expect(friendlyOwnerBookingError("Negocio sin plan activo")).toContain(
+      "agenda sigue intacta",
+    );
+  });
+
+  it("los dos mensajes son distintos", () => {
+    expect(friendlyOwnerBookingError("Negocio sin plan activo")).not.toBe(
+      friendlyBookingError("Negocio sin plan activo"),
+    );
+  });
+
+  /**
+   * El panel comparte las reglas de la franja: el motor de turnos es el mismo y
+   * un cupo lleno se lee igual venga por donde venga.
+   */
+  it("el dueño sigue leyendo las reglas de la franja", () => {
+    expect(friendlyOwnerBookingError("no quedan lugares")).toBe(
+      "No quedan lugares en esa franja. Elegí otra.",
+    );
+  });
+
+  /**
+   * El freno anti-spam lo tira `create_public_booking()`, que el panel no llama
+   * nunca. Si apareciera acá sería un bug, y contestarle al dueño "hiciste
+   * varias reservas seguidas" lo mandaría a esperar en vez de a mirar el error.
+   */
+  it("el dueño NO recibe los mensajes del camino anónimo", () => {
+    expect(friendlyOwnerBookingError("demasiadas reservas seguidas")).toBe(
+      "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
     );
   });
 });

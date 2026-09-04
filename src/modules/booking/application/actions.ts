@@ -7,7 +7,7 @@ import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
-import { friendlyBookingError } from "../domain/booking-errors";
+import { friendlyOwnerBookingError } from "../domain/booking-errors";
 import { resolveDayRange } from "../domain/day-range";
 import { bookingSchema } from "../domain/schemas";
 import { availableWeekdays, generateSlots } from "../domain/slots";
@@ -130,7 +130,7 @@ export async function createBookingAction(
   });
 
   if (error) {
-    return errorState(friendlyBookingError(error.message));
+    return errorState(friendlyOwnerBookingError(error.message));
   }
 
   // La agenda del panel cambió: que la próxima carga muestre el turno nuevo.

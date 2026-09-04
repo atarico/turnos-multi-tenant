@@ -50,6 +50,43 @@ const PUBLIC_BOOKING_RULES: [needle: string, message: string][] = [
     "origen no identificado",
     "No pudimos procesar la reserva desde este origen. Probá de nuevo.",
   ],
+  /**
+   * El negocio no tiene plan activo. Al visitante se le dice QUÉ pasa y no POR
+   * QUÉ: que a este negocio se le venció la prueba, que debe o que canceló es
+   * información del negocio, no de quien entró a sacar un turno. Contarlo sería
+   * filtrar por la puerta de adelante algo que la vista `public_tenants` se
+   * cuida de no exponer.
+   */
+  [
+    "sin plan activo",
+    "Este negocio no está tomando reservas online por ahora. Escribile directo para coordinar.",
+  ],
+];
+
+/**
+ * Errores que sólo puede tirar `create_booking()` llamada DESDE EL PANEL, o
+ * sea con el dueño del negocio del otro lado.
+ *
+ * Existe esta lista aparte por un solo caso, y vale la pena: es el mismo
+ * rechazo de la base que el de arriba, pero quien lo lee puede resolverlo. Al
+ * visitante hay que sacarlo del paso; al dueño hay que decirle exactamente qué
+ * pasó y dónde se arregla, o queda mirando un cartel que no explica nada
+ * mientras su agenda no toma turnos.
+ */
+const OWNER_BOOKING_RULES: [needle: string, message: string][] = [
+  /**
+   * NO dice "se te venció la prueba", y no es por prudencia: sería mentira en
+   * dos de los tres casos. `tenant_takes_bookings()` rechaza por igual la
+   * prueba vencida, la suscripción CANCELADA y la ausencia de suscripción, y
+   * los tres llegan acá con el mismo string. A un dueño que canceló el mes
+   * pasado, "se te terminó la prueba gratis" le describe algo que no pasó y lo
+   * manda a buscar una prueba que ya no existe. "No tenés un plan activo" es
+   * cierto en los tres, y la salida —elegir un plan— también.
+   */
+  [
+    "sin plan activo",
+    "Tu negocio no tiene un plan activo, así que no entran turnos nuevos. Tu agenda sigue intacta: elegí un plan en Suscripción y vuelve a andar.",
+  ],
 ];
 
 /** Errores que sólo puede tirar `reschedule_booking()`. */
@@ -70,10 +107,27 @@ function translate(
   return fallback;
 }
 
+/** Reserva hecha por un VISITANTE, desde la página pública `/{slug}`. */
 export function friendlyBookingError(message: string): string {
   return translate(
     message,
     [...PUBLIC_BOOKING_RULES, ...SHARED_RULES],
+    "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
+  );
+}
+
+/**
+ * Reserva cargada por el DUEÑO, desde el panel.
+ *
+ * Comparte todas las reglas de la franja —cupo, solape, disponibilidad— porque
+ * el motor es el mismo; lo único que cambia es a quién se le habla. Las reglas
+ * del visitante quedan afuera a propósito: el freno anti-spam y el origen no
+ * identificado son de `create_public_booking()`, que el panel no llama nunca.
+ */
+export function friendlyOwnerBookingError(message: string): string {
+  return translate(
+    message,
+    [...OWNER_BOOKING_RULES, ...SHARED_RULES],
     "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
   );
 }
