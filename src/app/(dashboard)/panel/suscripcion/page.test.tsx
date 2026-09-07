@@ -583,15 +583,27 @@ describe("baja de suscripción", () => {
       subscription({
         status: "incomplete",
         currentPeriodStart: new Date("2026-09-01T12:00:00Z"),
-        currentPeriodEnd: new Date(Date.now() + 20 * DAY),
+        currentPeriodEnd: new Date("2026-09-30T12:00:00Z"),
       }),
     );
 
     expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
-    expect(screen.getByText(/seguís tomando turnos hasta el/i)).toBeInTheDocument();
     expect(
       screen.queryByText(/no estás tomando turnos nuevos/i),
     ).not.toBeInTheDocument();
+
+    /**
+     * LA FECHA, no la prosa que la rodea.
+     *
+     * Afirmar sólo «seguís tomando turnos hasta el» deja pasar el único fallo
+     * que importa de esta rama: `servesUntil` vacío. El cartel diría "hasta el
+     * , que es lo que ya habías pagado" y el test seguiría verde, porque el
+     * regex termina justo antes de la interpolación. Toda la carga informativa
+     * de la rama ES esa fecha.
+     */
+    expect(
+      screen.getByText(/seguís tomando turnos hasta el/i),
+    ).toHaveTextContent("30 de septiembre");
   });
 
   /**
