@@ -9,7 +9,7 @@ import { applyDiscount } from "../domain/discount";
 import { priceUsdCentsFor, usdCentsToArsCents } from "../domain/price";
 import { quoteUsdToArs } from "./fx";
 import { createPreapproval } from "./mercadopago";
-import { getLiveSubscriptionIdForCharge } from "./queries";
+import { openSubscriptionForCharge } from "./queries";
 
 /** Quién cobra. Hoy hay una sola; el país decide cuál. Ver `countries.ts`. */
 const PROVIDER = "mercadopago";
@@ -71,9 +71,12 @@ export interface StartCheckoutParams {
  *
  * EL ORDEN ES PARTE DEL DISEÑO, no una casualidad de cómo quedó escrito:
  *
- *   1. Leer la suscripción viva. Sin ella no hay a qué atar el cobro, y su
- *      lectura devuelve `Result` justamente para poder distinguir "no tiene"
- *      de "la base no contestó".
+ *   1. Conseguir la suscripción a la que atarle el cobro. Es el único paso
+ *      que puede ESCRIBIR: si el negocio se había dado de baja, le abre la
+ *      fila `incomplete` del re-alta —sin segunda prueba gratis y sin
+ *      habilitar nada— y devuelve ésa. Sin fila no hay a qué atar el cobro, y
+ *      devuelve `Result` para poder distinguir "este negocio no tiene ninguna
+ *      suscripción" de "la base no contestó".
  *   2. Cotizar. Si no hay cotización NO se cobra: no hay último valor conocido
  *      ni precio de respaldo, porque cobrar un número inventado es peor que no
  *      cobrar. Esto se corta antes de tocar la pasarela.
@@ -95,7 +98,7 @@ export async function startCheckout(
 ): Promise<Result<CheckoutSession>> {
   const { tenantId, plan, payerEmail, backUrl, now = new Date() } = params;
 
-  const subscriptionId = await getLiveSubscriptionIdForCharge(tenantId);
+  const subscriptionId = await openSubscriptionForCharge(tenantId, plan);
   if (!subscriptionId.ok) return subscriptionId;
 
   const quote = await quoteUsdToArs(now);

@@ -6,12 +6,20 @@ import type { PlanTier } from "@/modules/tenants/domain/types";
  * `past_due` es su propio estado y no un `active` con una bandera: el cobro
  * falló pero el servicio sigue andando durante la gracia. Colapsarlo contra
  * `active` haría imposible saber a quién avisarle.
+ *
+ * `incomplete` es la fila que existe para cobrar y todavía no cobró: la abre
+ * el re-alta cuando un negocio dado de baja vuelve a elegir un plan. No
+ * habilita nada —eso lo hace el webhook cuando el pago entra— y es el único
+ * estado que NO se le puede dar a un negocio que nunca pagó, porque sería
+ * regalarle una segunda prueba gratis por la puerta de atrás. Ver
+ * `20260907120001_subscription_incomplete_status.sql`.
  */
 export type SubscriptionStatus =
   | "trialing"
   | "active"
   | "past_due"
-  | "canceled";
+  | "canceled"
+  | "incomplete";
 
 /** Una suscripción. Espeja la tabla `public.subscriptions`. */
 export interface Subscription {
@@ -131,6 +139,30 @@ export function takesNewBookings(
    * el que vence la prueba.
    */
   if (subscription.status === "canceled") {
+    return subscription.currentPeriodEnd.getTime() > now.getTime();
+  }
+
+  /**
+   * EL RE-ALTA NO SE ROBA LO QUE YA SE PAGÓ.
+   *
+   * `incomplete` se juzga igual que `canceled`, y por el mismo motivo: hereda
+   * el período pago de la baja de la que salió, así que quien se dio de baja
+   * el 5 estando pago hasta el 30 y aprieta "Contratar" el 10 sigue teniendo
+   * esos 20 días — empezar un checkout no se los puede quitar.
+   *
+   * No es "el estado incomplete habilita": lo que habilita es el período. Si
+   * la baja ya había vencido, hereda una fecha pasada y esto da false, que es
+   * lo correcto — el re-alta abre la puerta al COBRO, no al servicio. Quien
+   * activa de verdad es el webhook cuando el pago entra, y ahí el estado pasa
+   * a `active` y el período rota.
+   *
+   * Sin esta rama las dos superficies se contradicen sobre el mismo negocio:
+   * `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+   * cancelada seguiría habilitando, mientras que acá se juzga sólo la más
+   * nueva. `/panel/nueva-reserva` le escondería el formulario a alguien a
+   * quien `create_booking()` se lo aceptaría.
+   */
+  if (subscription.status === "incomplete") {
     return subscription.currentPeriodEnd.getTime() > now.getTime();
   }
 

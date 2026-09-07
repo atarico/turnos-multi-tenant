@@ -228,4 +228,73 @@ describe("takesNewBookings", () => {
   it("sin suscripción no toma turnos", () => {
     expect(takesNewBookings(null, NOW)).toBe(false);
   });
+
+  /**
+   * LA FILA DEL RE-ALTA NO HABILITA NADA.
+   *
+   * `incomplete` es la suscripción que el checkout abre para tener a qué atar
+   * el preapproval, y existe desde el instante en que el dueño aprieta
+   * "Contratar" hasta que el webhook confirma el cobro — o para siempre, si
+   * abandona el checkout. Si entrara acá, cualquiera que apretara el botón y
+   * cerrara la pestaña se llevaría el producto gratis.
+   *
+   * Hoy cae del lado del NO por el `return` final y no por un `if` propio, y
+   * ese es justamente el motivo de este test: es un comportamiento que nadie
+   * escribió a mano, así que nada avisa el día que alguien reordene la
+   * función.
+   */
+  it("la fila del re-alta, sin cobro confirmado, no toma turnos", () => {
+    expect(
+      takesNewBookings(
+        {
+          status: "incomplete",
+          trialEndsAt: null,
+          currentPeriodEnd: daysFromNow(-1),
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * PERO CON DÍAS TODAVÍA PAGADOS, SÍ.
+   *
+   * La fila del re-alta hereda el período de la baja de la que salió. Quien se
+   * dio de baja el 5 estando pago hasta el 30 y aprieta "Contratar" el 10
+   * sigue teniendo esos 20 días: empezar un checkout no se los puede quitar, y
+   * es la misma regla que protege a la baja — manda el HECHO, hasta cuándo
+   * está pago, y no la etiqueta.
+   *
+   * Sin esta rama las dos superficies se contradicen sobre el mismo negocio:
+   * `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+   * cancelada sigue habilitando por su cuenta, mientras que acá se juzga sólo
+   * la más nueva. `/panel/nueva-reserva` le escondería el formulario a alguien
+   * a quien `create_booking()` se lo aceptaría — 20 días ya pagados que la
+   * pantalla le saca sin que la base se entere.
+   */
+  it("pero con el período heredado todavía corriendo, sí toma turnos", () => {
+    expect(
+      takesNewBookings(
+        {
+          status: "incomplete",
+          trialEndsAt: null,
+          currentPeriodEnd: daysFromNow(20),
+        },
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * Y en el instante exacto en que ese período termina, no. Mismo borde que la
+   * baja: `>` y no `>=`.
+   */
+  it("no toma turnos justo en el instante en que termina el período heredado", () => {
+    expect(
+      takesNewBookings(
+        { status: "incomplete", trialEndsAt: null, currentPeriodEnd: NOW },
+        NOW,
+      ),
+    ).toBe(false);
+  });
 });

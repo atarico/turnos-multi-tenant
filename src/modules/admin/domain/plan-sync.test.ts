@@ -77,6 +77,23 @@ describe("planIsOutOfSync", () => {
     ).toBe(false);
   });
 
+  /**
+   * Y un alta sin confirmar tampoco, por el motivo espejo: su plan no es
+   * historia, es una INTENCIÓN. La fila `incomplete` guarda el plan que el
+   * dueño acaba de apretar, y `tenants.plan` sigue siendo el que tenía, porque
+   * todavía no entró un peso. Las dos columnas dicen la verdad y no coinciden.
+   *
+   * Sin esta rama, cada dueño que abandona el checkout —que son muchos—
+   * enciende una alarma en el panel del operador. Es exactamente la falsa
+   * alarma contra la que advierte el caso de la cancelada: la que suena cuando
+   * no pasa nada, y hace que nadie mire la que sí importa.
+   */
+  it("no denuncia un alta sin confirmar: su plan es una intención, no un pacto", () => {
+    expect(
+      planIsOutOfSync("basico", subscription({ plan: "premium", status: "incomplete" })),
+    ).toBe(false);
+  });
+
   /** Sin suscripción no hay dos planes que comparar. */
   it("no denuncia nada cuando el negocio no tiene suscripción", () => {
     expect(planIsOutOfSync("basico", null)).toBe(false);

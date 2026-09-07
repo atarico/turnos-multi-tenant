@@ -543,4 +543,93 @@ describe("baja de suscripción", () => {
 
     expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
   });
+
+  /**
+   * EL HUECO QUE ABRE EL RE-ALTA, y que no existe hasta que existe el re-alta.
+   *
+   * Apenas el dueño aprieta "Contratar", el checkout le abre una fila
+   * `incomplete` — y `getCurrentSubscription` trae LA MÁS NUEVA, así que a
+   * partir de ese instante la pantalla deja de leer la fila `canceled`. Si
+   * abandona el pago y vuelve una semana después, sin este cartel no encuentra
+   * un solo rastro: no dice que se dio de baja (esa fila ya no es la que se
+   * lee), no dice que está pagando (no entró nada), y no explica por qué no le
+   * entran turnos. Se queda mirando los planes sin saber qué le pasó.
+   */
+  it("con el alta sin confirmar dice que el cobro todavía no entró", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date(Date.now() - 2 * DAY),
+        currentPeriodEnd: new Date(Date.now() - DAY),
+      }),
+    );
+
+    expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+  });
+
+  /**
+   * EL CASO QUE EL REVIEW ENCONTRÓ. Alta sin confirmar PERO con días todavía
+   * pagados: la fila `incomplete` hereda el período de la baja, y decirle "no
+   * estás tomando turnos" a quien tiene 20 días pagados le miente y encima lo
+   * apura a pagar algo que ya tiene.
+   */
+  it("con el alta sin confirmar y días pagados, dice hasta cuándo sigue", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date("2026-09-01T12:00:00Z"),
+        currentPeriodEnd: new Date("2026-09-30T12:00:00Z"),
+      }),
+    );
+
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no estás tomando turnos nuevos/i),
+    ).not.toBeInTheDocument();
+
+    /**
+     * LA FECHA, no la prosa que la rodea.
+     *
+     * Afirmar sólo «seguís tomando turnos hasta el» deja pasar el único fallo
+     * que importa de esta rama: `servesUntil` vacío. El cartel diría "hasta el
+     * , que es lo que ya habías pagado" y el test seguiría verde, porque el
+     * regex termina justo antes de la interpolación. Toda la carga informativa
+     * de la rama ES esa fecha.
+     */
+    expect(
+      screen.getByText(/seguís tomando turnos hasta el/i),
+    ).toHaveTextContent("30 de septiembre");
+  });
+
+  /**
+   * Y NO le ofrece la baja. No hay nada que dar de baja —el cobro nunca
+   * entró—, y un botón que promete "no se te va a cobrar más" sobre algo que
+   * no cobra contesta una pregunta que nadie hizo, con una acción que
+   * `cancel_subscription()` ni siquiera aplica sobre esta fila.
+   */
+  it("con el alta sin confirmar no ofrece la baja", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * Y el botón de contratar SIGUE disponible. Es el reintento: el dueño que
+   * abandonó el checkout tiene que poder volver a apretar, y la fila
+   * `incomplete` que ya tiene se reusa en vez de abrirle un segundo cobro.
+   */
+  it("con el alta sin confirmar todavía deja contratar", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.getByRole("button", { name: /contratar pro/i }),
+    ).toBeEnabled();
+  });
 });

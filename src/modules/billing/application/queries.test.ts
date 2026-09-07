@@ -5,7 +5,7 @@ import type { SubscriptionRow } from "../domain/subscription-mapper";
 import {
   countPeriodBookings,
   getCurrentSubscription,
-  getLiveSubscriptionIdForCharge,
+  openSubscriptionForCharge,
 } from "./queries";
 
 /**
@@ -82,6 +82,36 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 /**
+ * El RPC del cliente ADMIN, que es otro cliente y por eso otro mock.
+ *
+ * `openSubscriptionForCharge` no puede usar el de sesión: la función que llama
+ * ESCRIBE en `subscriptions`, que no tiene policy de INSERT para nadie, y está
+ * grantada sólo a `service_role`. Un test que lo mockeara contra el cliente de
+ * sesión pasaría verde contra una llamada que en producción da 403.
+ */
+let adminResult: { data: unknown; error: unknown } = { data: null, error: null };
+/** Cuando está seteado, `createAdminClient` TIRA en vez de devolver un cliente. */
+let adminFailure: Error | null = null;
+
+type AdminRpcCall = (
+  fn: string,
+  args: Record<string, unknown>,
+) => Promise<{ data: unknown; error: unknown }>;
+const adminRpc = vi.fn<AdminRpcCall>(async () => adminResult);
+
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => {
+    if (adminFailure) throw adminFailure;
+    return {
+      rpc: (fn: string, args: Record<string, unknown>) => {
+        adminRpc(fn, args);
+        return adminResult;
+      },
+    };
+  },
+}));
+
+/**
  * Anotado como `SubscriptionRow` A PROPÓSITO: el test de más abajo deriva de
  * este literal los nombres de columna que se esperan pedir. Sin la anotación,
  * agregar un campo a la interfaz y al mapper dejaría este fixture viejo y el
@@ -107,6 +137,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   result = { data: null, error: null };
   clientFailure = null;
+  adminResult = { data: null, error: null };
+  adminFailure = null;
 });
 
 describe("getCurrentSubscription", () => {
@@ -163,16 +195,6 @@ describe("getCurrentSubscription", () => {
     expect(limit).toHaveBeenCalledWith(1);
   });
 
-  it("el cobro sigue exigiendo una suscripción VIVA, y past_due cuenta como viva", async () => {
-    await getLiveSubscriptionIdForCharge("tenant-1");
-
-    expect(inFilter).toHaveBeenCalledWith("status", [
-      "trialing",
-      "active",
-      "past_due",
-    ]);
-  });
-
   /**
    * El `as unknown as SubscriptionRow` del mapeo apaga al compilador, así que
    * si la lista de columnas pierde una, nada avisa: el campo llega `undefined`
@@ -214,6 +236,103 @@ describe("getCurrentSubscription", () => {
     clientFailure = new Error("no se pudo crear el cliente");
 
     await expect(getCurrentSubscription("tenant-1")).resolves.toBeNull();
+  });
+});
+
+/**
+ * Tests de `openSubscriptionForCharge`.
+ *
+ * Es el primer paso del checkout y el único que puede ESCRIBIR: si el negocio
+ * se había dado de baja, abre la fila `incomplete` del re-alta. Lo que se
+ * cuida acá no es la lógica —esa vive en la función de Postgres y la prueba
+ * `supabase/tests/open_subscription_for_charge.sql`— sino el borde entre los
+ * dos: que se llame a la función correcta, con el cliente correcto, y que los
+ * tres desenlaces lleguen al checkout distinguidos.
+ *
+ * Distinguirlos es todo el punto de que devuelva `Result` y no `string | null`:
+ * "la base no contestó" y "este negocio no tiene ninguna suscripción" piden
+ * cosas distintas del dueño, y sobre plata esa diferencia no se puede perder.
+ */
+describe("openSubscriptionForCharge", () => {
+  it("devuelve el id que abrió o encontró la base", async () => {
+    adminResult = { data: "sub-9", error: null };
+
+    const result = await openSubscriptionForCharge("tenant-1", "pro");
+
+    expect(result.ok && result.value).toBe("sub-9");
+  });
+
+  /**
+   * CON EL CLIENTE ADMIN, no con el de sesión.
+   *
+   * `open_subscription_for_charge` es `security definer` y está grantada sólo
+   * a `service_role`, porque escribe en una tabla sin policy de INSERT —un
+   * dueño que pudiera escribir su suscripción se pondría premium sin pagar.
+   * Llamada con el cliente de sesión, esto devuelve 403 en producción y el
+   * dueño no puede volver a contratar nunca.
+   */
+  it("llama a la función de la base con el cliente admin", async () => {
+    adminResult = { data: "sub-9", error: null };
+
+    await openSubscriptionForCharge("tenant-1", "pro");
+
+    expect(adminRpc).toHaveBeenCalledWith("open_subscription_for_charge", {
+      p_tenant_id: "tenant-1",
+      p_plan: "pro",
+    });
+    // Y no por el cliente de sesión: ése no tiene el grant.
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El plan viaja porque `subscriptions.plan` es `not null` y la fila del
+   * re-alta hay que abrirla con alguno. Elegir uno fijo acá le guardaría al
+   * dueño un plan que no apretó durante los milisegundos que tarda
+   * `attach_subscription_checkout` en pisarlo — y si el checkout falla en el
+   * medio, para siempre.
+   */
+  it("le pasa el plan que el dueño eligió", async () => {
+    adminResult = { data: "sub-9", error: null };
+
+    await openSubscriptionForCharge("tenant-1", "premium");
+
+    expect(adminRpc.mock.calls[0]![1]).toMatchObject({ p_plan: "premium" });
+  });
+
+  /**
+   * `null` es el negocio sin NINGUNA fila, que es un estado roto y no un caso
+   * normal: `create_business` abre la suscripción en la misma transacción que
+   * el negocio. Se distingue del error de base porque al dueño le pasa otra
+   * cosa y tiene que leer otra cosa.
+   */
+  it("sin ninguna suscripción devuelve subscription_not_found", async () => {
+    adminResult = { data: null, error: null };
+
+    const result = await openSubscriptionForCharge("tenant-1", "pro");
+
+    expect(!result.ok && result.error.code).toBe("subscription_not_found");
+  });
+
+  it("un error de la base NO se confunde con no tener suscripción", async () => {
+    adminResult = { data: null, error: { message: "boom" } };
+
+    const result = await openSubscriptionForCharge("tenant-1", "pro");
+
+    expect(!result.ok && result.error.code).toBe("subscription_query_failed");
+  });
+
+  /**
+   * EL CAMINO QUE TIRA, no el que devuelve error. `createAdminClient()`
+   * revienta si falta la service-role key, y mirar sólo `result.error` lo deja
+   * afuera: el dueño vería un crash del framework en vez de un mensaje. Es el
+   * mismo aprendizaje que ya está escrito en `checkout.ts` y en `cancel.ts`.
+   */
+  it("una excepción al crear el cliente admin vuelve como error legible", async () => {
+    adminFailure = new Error("falta la service-role key");
+
+    const result = await openSubscriptionForCharge("tenant-1", "pro");
+
+    expect(!result.ok && result.error.code).toBe("subscription_query_failed");
   });
 });
 

@@ -24,7 +24,7 @@ const rpc = vi.fn();
 let couponDiscount: number | null = null;
 
 vi.mock("./queries", () => ({
-  getLiveSubscriptionIdForCharge: vi.fn(),
+  openSubscriptionForCharge: vi.fn(),
 }));
 vi.mock("./fx", () => ({ quoteUsdToArs: vi.fn() }));
 vi.mock("./mercadopago", () => ({ createPreapproval: vi.fn() }));
@@ -32,7 +32,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({ rpc }),
 }));
 
-const { getLiveSubscriptionIdForCharge } = await import("./queries");
+const { openSubscriptionForCharge } = await import("./queries");
 const { quoteUsdToArs } = await import("./fx");
 const { createPreapproval } = await import("./mercadopago");
 
@@ -64,7 +64,7 @@ beforeEach(() => {
   // NO se ejecutó— pasarían a fallar por lo que hizo el test anterior.
   vi.clearAllMocks();
 
-  vi.mocked(getLiveSubscriptionIdForCharge).mockResolvedValue(ok(SUBSCRIPTION_ID));
+  vi.mocked(openSubscriptionForCharge).mockResolvedValue(ok(SUBSCRIPTION_ID));
   vi.mocked(quoteUsdToArs).mockResolvedValue(ok(quote));
   vi.mocked(createPreapproval).mockResolvedValue(ok(session));
   couponDiscount = null;
@@ -85,6 +85,22 @@ describe("startCheckout", () => {
     const result = await startCheckout(params);
 
     expect(result.ok && result.value.initPoint).toBe(session.initPoint);
+  });
+
+  /**
+   * El plan viaja al primer paso, y no es un detalle de plomería: ese paso es
+   * el que abre la fila del re-alta cuando el negocio se había dado de baja, y
+   * `subscriptions.plan` es `not null`. Sin el plan que el dueño acaba de
+   * apretar, la fila nace con uno inventado — y si el checkout falla en el
+   * medio, se queda con ése.
+   */
+  it("le pasa el plan elegido al paso que abre la suscripción", async () => {
+    await startCheckout(params);
+
+    expect(openSubscriptionForCharge).toHaveBeenCalledWith(
+      params.tenantId,
+      "pro",
+    );
   });
 
   /**
@@ -180,7 +196,7 @@ describe("startCheckout", () => {
     ["no hay suscripción", appError("subscription_not_found", "…")],
     ["la base no contestó", appError("subscription_query_failed", "…")],
   ])("si %s no se abre nada en la pasarela", async (_caso, error) => {
-    vi.mocked(getLiveSubscriptionIdForCharge).mockResolvedValue(err(error));
+    vi.mocked(openSubscriptionForCharge).mockResolvedValue(err(error));
 
     const result = await startCheckout(params);
 

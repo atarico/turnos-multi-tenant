@@ -1,5 +1,7 @@
 import { appError, err, ok, type Result } from "@/core/result";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import type { PlanTier } from "@/modules/tenants/domain/types";
 
 import type { Subscription } from "../domain/subscription";
 import { type SubscriptionRow, toSubscription } from "../domain/subscription-mapper";
@@ -31,8 +33,8 @@ const COLUMNS =
  *
  * Acá se trae el HECHO; qué significa cada estado lo decide el dominio, en
  * `takesNewBookings`. La que sí conserva el filtro estricto es
- * `getLiveSubscriptionIdForCharge`, que está justo abajo y existe aparte
- * precisamente por esto: cobrar sobre una suscripción dada de baja es lo único
+ * `openSubscriptionForCharge`, que está justo abajo y existe aparte
+ * precisamente por esto: cobrar sobre una suposición equivocada es lo único
  * que no puede pasar.
  *
  * Trae LA MÁS NUEVA. Hoy hay una sola fila por negocio, pero el índice único
@@ -71,34 +73,53 @@ export async function getCurrentSubscription(
 }
 
 /**
- * El id de la suscripción viva del negocio, para atarle un cobro.
+ * La suscripción a la que atarle un cobro, abriéndola si el negocio volvía.
  *
- * Es una función APARTE de `getCurrentSubscription` y no un parámetro suyo,
- * porque lo que cambia no es el filtro sino el contrato de error. Allá arriba
- * un fallo de base y "este negocio no tiene suscripción" son el mismo `null`,
- * que es lo correcto para un cartel del panel y es inaceptable acá: cobrar
- * sobre la suposición equivocada de las dos es abrir una suscripción que no se
- * puede atar a nada, o no abrirla cuando sí correspondía.
+ * Es el primer paso de `startCheckout` y el único que puede ESCRIBIR. Hasta el
+ * re-alta esto era una lectura pura de la fila viva, y por eso un negocio
+ * `canceled` no podía volver a pagar nunca: no tenía ninguna viva, la lectura
+ * devolvía "no tenés suscripción", y el checkout cortaba ahí. Le pasaba a tres
+ * negocios de producción que se habían dado de baja.
+ *
+ * TODA LA LÓGICA VIVE EN POSTGRES, no acá, y eso no es una preferencia de
+ * estilo: entre un "¿tiene alguna cobrable?" leído desde la aplicación y el
+ * insert que vendría después caben dos pestañas del mismo dueño, y cada una
+ * abriría su preapproval en Mercado Pago. Los dos cobran, todos los meses,
+ * hasta que alguien los encuentre a mano. Resuelto en una sola función de la
+ * base, las dos llamadas se encuentran contra el índice único parcial y la que
+ * pierde se queda con la fila de la que ganó. Ver
+ * `20260907120002_open_subscription_for_charge.sql`.
+ *
+ * CON EL CLIENTE ADMIN y no con el de sesión: la función escribe en
+ * `subscriptions`, que no tiene policy de INSERT ni de UPDATE para nadie, y
+ * está grantada sólo a `service_role`. Ese hueco es la decisión — un dueño que
+ * pudiera escribir su propia suscripción se pondría `active` en premium sin
+ * pagar. Quién decide que el que pide es el dueño ya lo resolvió el server
+ * action, con la sesión en la mano.
+ *
+ * Devuelve `Result` y no `string | null` por lo mismo que su antecesora: "la
+ * base no contestó" y "este negocio no tiene ninguna suscripción" piden cosas
+ * distintas del dueño, y sobre plata esa diferencia no se puede perder.
  *
  * Devuelve sólo el id: es lo único que el checkout necesita, y traer la fila
  * entera invitaría a decidir cosas sobre datos que van a cambiar entre esta
- * lectura y el momento en que el webhook confirme el cobro.
+ * llamada y el momento en que el webhook confirme el cobro.
  */
-export async function getLiveSubscriptionIdForCharge(
+export async function openSubscriptionForCharge(
   tenantId: string,
+  plan: PlanTier,
 ): Promise<Result<string>> {
-  let data: { id: string } | null;
+  let data: unknown;
   try {
-    const supabase = await createClient();
-    // El `try` abarca también la creación del cliente, no sólo la consulta:
-    // mirar únicamente el `error` de PostgREST deja afuera justo el camino que
-    // rompe cuando falta configuración. Mismo aprendizaje que el de arriba.
-    const result = await supabase
-      .from("subscriptions")
-      .select("id")
-      .eq("tenant_id", tenantId)
-      .in("status", LIVE_STATUSES)
-      .maybeSingle();
+    // TODO EL BLOQUE dentro del `try`, incluida la creación del cliente:
+    // `createAdminClient()` revienta si falta la service-role key, y mirar
+    // sólo `result.error` deja afuera justo ese camino. Mismo aprendizaje que
+    // en `checkout.ts` y en `cancel.ts`.
+    const admin = createAdminClient();
+    const result = await admin.rpc("open_subscription_for_charge", {
+      p_tenant_id: tenantId,
+      p_plan: plan,
+    });
 
     if (result.error) {
       return err(
@@ -118,16 +139,22 @@ export async function getLiveSubscriptionIdForCharge(
     );
   }
 
-  if (!data) {
+  // `null` es el negocio sin NINGUNA fila. No es el que se dio de baja —a ése
+  // la función le abre una— sino un estado que no debería existir:
+  // `create_business` abre la suscripción en la misma transacción que el
+  // negocio. Por eso el mensaje no dice "volvé a ingresar": no hay nada que el
+  // dueño pueda hacer solo, y mandarlo a reintentar lo deja dando vueltas.
+  if (typeof data !== "string" || data === "") {
     return err(
       appError(
         "subscription_not_found",
-        "Tu negocio no tiene una suscripción activa. Volvé a ingresar.",
+        "No encontramos la suscripción de tu negocio. Escribinos y lo " +
+          "resolvemos: no se te cobró nada.",
       ),
     );
   }
 
-  return ok(data.id);
+  return ok(data);
 }
 
 /** Lo que hace falta para dar de baja: nuestra fila y la de la pasarela. */
@@ -146,15 +173,18 @@ export interface LiveSubscriptionForCancel {
 /**
  * La suscripción viva del negocio, para darla de baja.
  *
- * Filtra por estados VIVOS igual que `getLiveSubscriptionIdForCharge` y por la
- * misma razón de fondo: acá tampoco sirve el `null` ambiguo de
+ * Filtra por estados VIVOS —a diferencia del camino del cobro, que desde el
+ * re-alta también acepta una fila `incomplete`— y por la misma razón de fondo
+ * de siempre: acá no sirve el `null` ambiguo de
  * `getCurrentSubscription`. Dar de baja "por las dudas" sobre un fallo de
  * lectura, o decirle a alguien que no tiene suscripción porque la base no
  * contestó, son los dos errores que este `Result` existe para evitar.
  *
  * Es una función aparte de la del cobro y no un parámetro suyo porque lo que
- * necesita es distinto: el cobro quiere sólo el id nuestro, y la baja necesita
- * además el de la pasarela, que es a quien hay que ir a cortarle el débito.
+ * necesita es distinto: el cobro quiere sólo el id nuestro —y puede abrir una
+ * fila si hace falta—, y la baja necesita además el de la pasarela, que es a
+ * quien hay que ir a cortarle el débito. Y no abre nada: no se da de baja lo
+ * que no existe.
  */
 export async function getLiveSubscriptionForCancel(
   tenantId: string,
