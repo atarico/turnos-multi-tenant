@@ -571,6 +571,30 @@ describe("baja de suscripción", () => {
   });
 
   /**
+   * EL CASO QUE EL REVIEW ENCONTRÓ. Alta sin confirmar PERO con días todavía
+   * pagados: la fila `incomplete` hereda el período de la baja, y decirle "no
+   * estás tomando turnos" a quien tiene 20 días pagados le miente y encima lo
+   * apura a pagar algo que ya tiene.
+   */
+  it("con el alta sin confirmar y días pagados, dice hasta cuándo sigue", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date("2026-09-01T12:00:00Z"),
+        currentPeriodEnd: new Date(Date.now() + 20 * DAY),
+      }),
+    );
+
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+    expect(screen.getByText(/seguís tomando turnos hasta el/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no estás tomando turnos nuevos/i),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
    * Y NO le ofrece la baja. No hay nada que dar de baja —el cobro nunca
    * entró—, y un botón que promete "no se te va a cobrar más" sobre algo que
    * no cobra contesta una pregunta que nadie hizo, con una acción que

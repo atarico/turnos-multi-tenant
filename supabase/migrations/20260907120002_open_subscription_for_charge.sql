@@ -69,17 +69,38 @@ create unique index subscriptions_one_pending_per_tenant
 --
 -- LOS DOS VALORES DE RELLENO, que son de relleno y conviene que se lea:
 --
---   · El período nace CERRADO (`p_now - 1 día` → `p_now`) y no abierto hacia
---     adelante. La columna es `not null` y el check `subscriptions_period_order`
---     exige `end > start`, así que hay que poner algo; poner algo que ya venció
---     es lo único seguro. Si mañana alguien agrega `incomplete` a
---     `tenant_takes_bookings()` por error, un período vencido no regala nada
---     igual. Lo pisa el primer cobro: `apply_subscription_payment` rota el
---     período recién cuando llega el aviso de un pago de verdad.
+--   · El período NO es de relleno: se hereda de la baja, y es la mitad del
+--     diseño. Ver el bloque de abajo.
 --   · `price_usd_cents` en 0 porque el precio todavía no se calculó — sale de
 --     la cotización del día, que `startCheckout` pide DESPUÉS de este paso. Lo
 --     estampa `attach_subscription_checkout` unos milisegundos más tarde, y
 --     hasta entonces nadie lee el precio de una fila `incomplete`.
+--
+-- EL PERÍODO SE HEREDA DE LA BAJA, Y NO ES UN DETALLE.
+--
+-- La baja corta el cobro y NO el servicio: quien pagó hasta el 30 y se dio de
+-- baja el 5 sigue tomando turnos hasta el 30 (20260904120001). Si se da de
+-- alta el 10 y no termina de pagar, esos 20 días siguen siendo suyos — ya los
+-- pagó, y empezar un checkout no se los puede quitar.
+--
+-- Un período de relleno ya vencido se los quitaba. Del lado de la base no,
+-- porque `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+-- cancelada seguía habilitando; pero `getCurrentSubscription` trae LA MÁS
+-- NUEVA, así que `takesNewBookings` juzgaba sólo la fila `incomplete` y decía
+-- que no. Las dos superficies contestaban distinto sobre el mismo negocio:
+-- `/panel/nueva-reserva` le escondía el formulario mientras `create_booking()`
+-- se lo habría aceptado. Es la falla que el comentario de `takesNewBookings`
+-- advierte, y esta vez apuntando para el otro lado.
+--
+-- Heredarlo lo arregla en el origen y sin una sola rama: la fila nueva dice
+-- hasta cuándo está pago, que es el HECHO que las dos superficies miran. Si la
+-- baja ya venció, hereda una fecha pasada y no habilita nada — el mismo
+-- resultado que el relleno, por la regla correcta en vez de por casualidad.
+-- Se toma la baja de período MÁS LARGO y no la más nueva: lo que se hereda es
+-- "hasta cuándo está pago", y esa es la mayor.
+--
+-- Lo pisa el primer cobro: `apply_subscription_payment` rota el período recién
+-- cuando llega el aviso de un pago de verdad.
 --
 -- `p_plan` se guarda aunque también lo pise `attach_subscription_checkout`: la
 -- columna es `not null` y elegir el plan de otro sería peor que guardar el que
@@ -102,7 +123,9 @@ security definer
 set search_path = public
 as $$
 declare
-  v_id uuid;
+  v_id    uuid;
+  v_start timestamptz;
+  v_end   timestamptz;
 begin
   -- 1. Lo cobrable ya existente. `incomplete` entra en la lista: si el dueño
   --    volvió del checkout sin pagar y reintenta, tiene que reusar SU fila y
@@ -118,11 +141,17 @@ begin
   end if;
 
   -- 3. (antes que el 2, porque es la salida) Ninguna fila dada de baja
-  --    significa que no hay nada que re-dar de alta.
-  if not exists (
-    select 1 from public.subscriptions
-     where tenant_id = p_tenant_id and status = 'canceled'
-  ) then
+  --    significa que no hay nada que re-dar de alta. La misma consulta trae el
+  --    período que se hereda: la baja que llega más lejos.
+  select current_period_start, current_period_end
+    into v_start, v_end
+    from public.subscriptions
+   where tenant_id = p_tenant_id
+     and status = 'canceled'
+   order by current_period_end desc
+   limit 1;
+
+  if not found then
     return null;
   end if;
 
@@ -135,7 +164,7 @@ begin
     )
     values (
       p_tenant_id, p_plan, 'incomplete',
-      p_now - interval '1 day', p_now,
+      v_start, v_end,
       null, 0
     )
     returning id into v_id;
@@ -155,9 +184,49 @@ $$;
 
 comment on function public.open_subscription_for_charge(uuid, public.plan_tier, timestamptz) is
   'Devuelve la suscripción a la que atarle un cobro. Si el negocio no tiene '
-  'ninguna cobrable pero sí una dada de baja, abre una `incomplete` — el '
-  're-alta, sin segunda prueba gratis. Null si el negocio no tiene ninguna '
-  'fila, que es un estado roto y no un caso a tapar.';
+  'ninguna cobrable pero sí una dada de baja, abre una `incomplete` heredando '
+  'el período pago de esa baja — el re-alta, sin segunda prueba gratis y sin '
+  'quitarle los días que ya pagó. Null si el negocio no tiene ninguna fila, '
+  'que es un estado roto y no un caso a tapar.';
+
+-- ------------------------------------------------------------
+-- Y el período heredado tiene que HABILITAR mientras corra.
+--
+-- Cambia UNA cosa contra la versión de 20260904120001: `incomplete` habilita
+-- igual que `canceled`, mientras su período siga vigente. Es el mismo criterio
+-- con el que se escribió aquélla —manda el HECHO, hasta cuándo está pago, y no
+-- la etiqueta— aplicado a la fila que ahora hereda ese hecho.
+--
+-- Hoy esta cláusula es redundante: el `exists` recorre TODAS las filas del
+-- negocio y la cancelada de la que se heredó sigue habilitando por su cuenta.
+-- Está igual, y a propósito: sin ella, la base y `takesNewBookings` llegan a la
+-- misma respuesta leyendo filas DISTINTAS, y dos caminos para una sola regla es
+-- exactamente cómo se separan. Acá las dos leen la misma fila y el mismo campo.
+-- ------------------------------------------------------------
+create or replace function public.tenant_takes_bookings(p_tenant_id uuid)
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.subscriptions s
+    where s.tenant_id = p_tenant_id
+      and (
+        s.status in ('active', 'past_due')
+        or (s.status = 'trialing'   and s.trial_ends_at      > now())
+        or (s.status = 'canceled'   and s.current_period_end > now())
+        or (s.status = 'incomplete' and s.current_period_end > now())
+      )
+  );
+$$;
+
+comment on function public.tenant_takes_bookings(uuid) is
+  'Si el negocio puede recibir turnos NUEVOS. Mira la suscripción, nunca '
+  '`tenants.plan`. Una baja habilita hasta el fin del período ya pagado, y un '
+  're-alta hereda ese período; pasada esa fecha se congela sola, sin proceso '
+  'que la apague.';
 
 revoke execute on function public.open_subscription_for_charge(uuid, public.plan_tier, timestamptz)
   from public, anon, authenticated;

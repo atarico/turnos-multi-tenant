@@ -12,9 +12,16 @@
 --    es el default de la columna, o sea el camino de menor resistencia— pasa
 --    los casos 1 y 2 y REGALA catorce días acá.
 --
--- 2. QUE LA FILA NUEVA NO HABILITE NADA. El caso 4 es el espejo del anterior:
---    abrirla en `active` o en `past_due` también esquiva la prueba gratis, y
---    entrega el producto antes de que entre un peso.
+-- 2. QUE LA FILA NUEVA NO HABILITE NADA POR SÍ SOLA. El caso 4 es el espejo
+--    del anterior: abrirla en `active` o en `past_due` también esquiva la
+--    prueba gratis, y entrega el producto antes de que entre un peso.
+--
+-- 2b. Y QUE TAMPOCO SE ROBE LO QUE YA SE PAGÓ. Los casos 4b a 4d son el otro
+--    borde de la misma regla, y el que encontró el review: la fila hereda el
+--    período de la baja, así que quien tenía 20 días pagados los conserva al
+--    apretar "Contratar". Sin herencia, la base seguía habilitando y la
+--    pantalla no: `/panel/nueva-reserva` le escondía el formulario a alguien a
+--    quien `create_booking()` se lo aceptaba.
 --
 -- 3. QUE NO SE PISE LA HISTORIA. El caso 5 falla si alguien "simplifica"
 --    reviviendo la fila cancelada con un UPDATE. Pasaría los casos 1 a 4 sin
@@ -199,11 +206,15 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 4: la fila nueva NO habilita turnos.
+-- Caso 4: con la baja YA VENCIDA, la fila nueva no habilita turnos.
 --
 -- El re-alta abre la puerta al COBRO, no al servicio. Quien activa es el
 -- webhook cuando el pago entra. Una fila abierta en `active` o en `past_due`
 -- pasa los casos 1 a 3 y entrega el producto gratis.
+--
+-- La baja de acá venció hace 3 días, así que no hay nada que heredar. Su
+-- espejo es el caso 4b, y los dos juntos son la regla: lo que habilita es el
+-- PERÍODO, nunca la etiqueta.
 -- ------------------------------------------------------------
 do $$
 begin
@@ -213,6 +224,109 @@ begin
   if pg_temp.takes_bookings() then
     raise exception
       'CASO 4: el negocio toma turnos con la sola fila de re-alta, sin haber pagado';
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- Caso 4b: EL CASO QUE ENCONTRÓ EL REVIEW.
+--
+-- La baja tenía período vigente, así que el re-alta lo HEREDA y el negocio
+-- sigue tomando turnos. Sin herencia la fila nacía con un período de relleno
+-- ya vencido, y ahí las dos superficies se contradecían sobre el mismo
+-- negocio: la base seguía habilitando —`tenant_takes_bookings()` es un
+-- `exists` sobre TODAS las filas y la cancelada matcheaba sola— mientras
+-- `takesNewBookings`, que juzga sólo la más nueva, decía que no.
+-- `/panel/nueva-reserva` le escondía el formulario a alguien a quien
+-- `create_booking()` se lo habría aceptado: 20 días ya pagados, perdidos por
+-- apretar un botón.
+-- ------------------------------------------------------------
+do $$
+begin
+  perform pg_temp.set_subscription('canceled', interval '25 days');
+  perform pg_temp.open();
+
+  if not pg_temp.takes_bookings() then
+    raise exception
+      'CASO 4b: el re-alta le quitó los días que el negocio ya había pagado';
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- Caso 4c: y la fecha heredada es LA DE LA BAJA, no una inventada.
+--
+-- El caso 4b pasa igual si alguien "arregla" esto poniendo un período fijo
+-- hacia adelante —un mes, digamos—, que regalaría servicio que nadie pagó.
+-- Acá se compara la fecha contra la fila de origen.
+-- ------------------------------------------------------------
+do $$
+declare
+  v record;
+  v_canceled_end timestamptz;
+  v_new_end      timestamptz;
+  v_new          uuid;
+begin
+  select * into v from t_ids;
+  perform pg_temp.set_subscription('canceled', interval '25 days');
+
+  select current_period_end into v_canceled_end
+    from public.subscriptions where tenant_id = v.tenant_id;
+
+  v_new := pg_temp.open();
+
+  select current_period_end into v_new_end
+    from public.subscriptions where id = v_new;
+
+  if v_new_end is distinct from v_canceled_end then
+    raise exception
+      'CASO 4c: heredó % y la baja decía %', v_new_end, v_canceled_end;
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- Caso 4d: con dos bajas, hereda la que llega MÁS LEJOS.
+--
+-- Lo que se hereda es "hasta cuándo está pago", y eso es la mayor de las
+-- fechas, no la de la fila más nueva. Una implementación que ordene por
+-- `created_at` pasa los casos 4b y 4c y le quita meses a quien tuvo una baja
+-- corta después de una larga.
+-- ------------------------------------------------------------
+do $$
+declare
+  v record;
+  v_new     uuid;
+  v_new_end timestamptz;
+  v_far     timestamptz;
+begin
+  select * into v from t_ids;
+  perform pg_temp.set_subscription('canceled', interval '40 days');
+
+  v_far := now() + interval '40 days';
+
+  -- Una segunda baja, más nueva y de período más corto.
+  --
+  -- `created_at` se escribe A MANO y no se deja en su default, que es el punto
+  -- del caso: dentro de una transacción `now()` está CONGELADO, así que las
+  -- dos filas nacerían con el mismo instante y un `order by created_at` sería
+  -- un empate que Postgres desempata como quiera. Con el empate, el mutante
+  -- que ordena por fecha de creación sobrevivía y el caso no probaba nada.
+  insert into public.subscriptions (
+    tenant_id, plan, status,
+    current_period_start, current_period_end, price_usd_cents, created_at
+  ) values (
+    v.tenant_id, 'pro', 'canceled',
+    now() - interval '60 days', now() + interval '5 days', 0,
+    now() + interval '1 hour'
+  );
+
+  v_new := pg_temp.open();
+
+  select current_period_end into v_new_end
+    from public.subscriptions where id = v_new;
+
+  if v_new_end < v_far - interval '1 minute' then
+    raise exception
+      'CASO 4d: heredó % de la baja corta en vez de la que llegaba hasta %',
+      v_new_end, v_far;
   end if;
 end $$;
 

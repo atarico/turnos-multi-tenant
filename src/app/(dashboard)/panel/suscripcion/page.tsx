@@ -122,6 +122,18 @@ export default async function SuscripcionPage({
    * rastro de lo que le pasó ni de por qué no le entran turnos.
    */
   const awaitingFirstCharge = subscription?.status === "incomplete";
+
+  /**
+   * Y hereda el período de la baja, así que puede seguir tomando turnos.
+   *
+   * Decirle "no estás tomando turnos nuevos" a quien todavía tiene días
+   * pagados es la misma mentira que decírselo a una baja con período vigente,
+   * y encima lo empuja a pagar de apuro algo que ya tiene. Se calcula igual
+   * que `stillServed` porque es la misma pregunta sobre la misma columna.
+   */
+  const stillServedWhileIncomplete =
+    awaitingFirstCharge &&
+    subscription.currentPeriodEnd.getTime() > now.getTime();
   // Y una baja con el período todavía corriendo NO es lo mismo que una vencida:
   // en la primera sigue entrando trabajo, en la segunda no. Decir lo mismo en
   // las dos es mentirle a una de las dos.
@@ -214,17 +226,31 @@ export default async function SuscripcionPage({
         </p>
       )}
 
-      {/* EL ALTA A MEDIO CAMINO. Dice las dos cosas que el dueño necesita: que
-          no está tomando turnos, y que lo que falta es el cobro y no un
-          trámite nuestro. Y no promete una activación automática que dependa
-          del tiempo: si abandonó el checkout, no va a entrar nunca solo. */}
+      {/* EL ALTA A MEDIO CAMINO, y son DOS situaciones distintas.
+          Las dos empiezan igual —el cobro no entró— y terminan en lados
+          opuestos: al que le quedan días pagados los sigue teniendo, y al que
+          no, no. Decir lo segundo en el primer caso le miente y encima lo
+          apura a pagar algo que ya tiene. Ninguno de los dos promete una
+          activación que dependa del tiempo: si abandonó el checkout, no va a
+          entrar nunca solo. */}
       {awaitingFirstCharge && (
         <p className="mt-4 rounded-xl border border-border bg-surface-2 px-3.5 py-3 text-sm text-muted">
-          Empezaste a contratar un plan y <b>todavía no nos entró el cobro</b>,
-          así que <b>no estás tomando turnos nuevos</b>. Tu agenda sigue ahí:
-          podés verla, cerrarla y reprogramarla. Si ya pagaste, se activa solo
-          en unos minutos; si no llegaste a terminar, elegí tu plan de nuevo acá
-          abajo.
+          Empezaste a contratar un plan y <b>todavía no nos entró el cobro</b>.{" "}
+          {stillServedWhileIncomplete ? (
+            <>
+              Seguís tomando turnos hasta el <b>{servesUntil}</b>, que es lo que
+              ya habías pagado. Si ya pagaste el plan nuevo, se activa solo en
+              unos minutos; si no llegaste a terminar, elegilo de nuevo acá
+              abajo.
+            </>
+          ) : (
+            <>
+              Así que <b>no estás tomando turnos nuevos</b>. Tu agenda sigue
+              ahí: podés verla, cerrarla y reprogramarla. Si ya pagaste, se
+              activa solo en unos minutos; si no llegaste a terminar, elegí tu
+              plan de nuevo acá abajo.
+            </>
+          )}
         </p>
       )}
 

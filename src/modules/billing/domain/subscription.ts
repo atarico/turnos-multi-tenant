@@ -142,14 +142,30 @@ export function takesNewBookings(
     return subscription.currentPeriodEnd.getTime() > now.getTime();
   }
 
-  // Queda `active`, `past_due` e `incomplete`, y sólo los dos primeros entran.
-  //
-  // `incomplete` cae del lado del NO sin un `if` propio: es la fila del re-alta
-  // y no habilita nada hasta que el webhook confirme el cobro. Dejarla entrar
-  // acá le regalaría el producto a cualquiera que apriete "Contratar" y no
-  // termine de pagar. Espeja `tenant_takes_bookings()`, que enumera los
-  // estados que SÍ habilitan y por eso tampoco lo nombra.
-  //
+  /**
+   * EL RE-ALTA NO SE ROBA LO QUE YA SE PAGÓ.
+   *
+   * `incomplete` se juzga igual que `canceled`, y por el mismo motivo: hereda
+   * el período pago de la baja de la que salió, así que quien se dio de baja
+   * el 5 estando pago hasta el 30 y aprieta "Contratar" el 10 sigue teniendo
+   * esos 20 días — empezar un checkout no se los puede quitar.
+   *
+   * No es "el estado incomplete habilita": lo que habilita es el período. Si
+   * la baja ya había vencido, hereda una fecha pasada y esto da false, que es
+   * lo correcto — el re-alta abre la puerta al COBRO, no al servicio. Quien
+   * activa de verdad es el webhook cuando el pago entra, y ahí el estado pasa
+   * a `active` y el período rota.
+   *
+   * Sin esta rama las dos superficies se contradicen sobre el mismo negocio:
+   * `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+   * cancelada seguiría habilitando, mientras que acá se juzga sólo la más
+   * nueva. `/panel/nueva-reserva` le escondería el formulario a alguien a
+   * quien `create_booking()` se lo aceptaría.
+   */
+  if (subscription.status === "incomplete") {
+    return subscription.currentPeriodEnd.getTime() > now.getTime();
+  }
+
   // `past_due` entra: el cobro falló pero Mercado Pago lo sigue reintentando y
   // el servicio anda durante la gracia. Espeja `LIVE_STATUSES`.
   //

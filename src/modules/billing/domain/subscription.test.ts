@@ -257,19 +257,42 @@ describe("takesNewBookings", () => {
   });
 
   /**
-   * Y tampoco con una fecha futura encima. Es el caso que atrapa a quien
-   * "arregle" el período de relleno de `open_subscription_for_charge` moviendo
-   * `current_period_end` hacia adelante: lo que decide acá es el ESTADO, no la
-   * fecha, porque todavía no entró un peso.
+   * PERO CON DÍAS TODAVÍA PAGADOS, SÍ.
+   *
+   * La fila del re-alta hereda el período de la baja de la que salió. Quien se
+   * dio de baja el 5 estando pago hasta el 30 y aprieta "Contratar" el 10
+   * sigue teniendo esos 20 días: empezar un checkout no se los puede quitar, y
+   * es la misma regla que protege a la baja — manda el HECHO, hasta cuándo
+   * está pago, y no la etiqueta.
+   *
+   * Sin esta rama las dos superficies se contradicen sobre el mismo negocio:
+   * `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+   * cancelada sigue habilitando por su cuenta, mientras que acá se juzga sólo
+   * la más nueva. `/panel/nueva-reserva` le escondería el formulario a alguien
+   * a quien `create_booking()` se lo aceptaría — 20 días ya pagados que la
+   * pantalla le saca sin que la base se entere.
    */
-  it("ni siquiera con el período apuntando al futuro", () => {
+  it("pero con el período heredado todavía corriendo, sí toma turnos", () => {
     expect(
       takesNewBookings(
         {
           status: "incomplete",
           trialEndsAt: null,
-          currentPeriodEnd: daysFromNow(30),
+          currentPeriodEnd: daysFromNow(20),
         },
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * Y en el instante exacto en que ese período termina, no. Mismo borde que la
+   * baja: `>` y no `>=`.
+   */
+  it("no toma turnos justo en el instante en que termina el período heredado", () => {
+    expect(
+      takesNewBookings(
+        { status: "incomplete", trialEndsAt: null, currentPeriodEnd: NOW },
         NOW,
       ),
     ).toBe(false);
