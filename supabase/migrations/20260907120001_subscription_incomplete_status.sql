@@ -1,0 +1,45 @@
+-- ============================================================
+-- Un quinto estado: la suscripción que existe para cobrar y todavía no cobra.
+--
+-- POR QUÉ HACE FALTA. Hoy un negocio `canceled` no puede volver a pagar. El
+-- checkout arranca leyendo la suscripción VIVA (`getLiveSubscriptionIdForCharge`),
+-- no encuentra ninguna, y corta con "tu negocio no tiene una suscripción
+-- activa". Ya le pasa a tres negocios de producción: se dieron de baja y no
+-- tienen forma de volver.
+--
+-- El re-alta abre una fila NUEVA en vez de revivir la cancelada, porque es lo
+-- que el esquema eligió el día uno:
+--
+--     -- UN negocio, UNA suscripción viva. Índice único parcial en vez de
+--     -- constraint porque las canceladas son historia y tienen que poder
+--     -- acumularse: un negocio que se da de baja y vuelve deja dos filas, y
+--     -- sólo una está viva.
+--
+-- Y esa fila nueva no puede nacer en ninguno de los cuatro estados que había:
+--
+--   · `trialing` le regalaría una segunda prueba gratis a quien ya la usó.
+--   · `active` y `past_due` le dan el servicio ANTES de que entre un peso.
+--   · `canceled` no la agarra nadie: `attach_subscription_checkout` la
+--     excluye y `apply_subscription_payment` devuelve `not_live`.
+--
+-- `incomplete` es exactamente ese hueco: la fila existe para que el checkout
+-- tenga a qué atar el preapproval, y NO habilita nada. Que no habilite no se
+-- programa en ningún lado — `tenant_takes_bookings()` enumera los estados que
+-- sí habilitan, así que un estado que no está en esa lista no entra. El nombre
+-- es el de Stripe para lo mismo, que es la palabra que ya usa la industria.
+--
+-- LO QUE NO CAMBIA, y es la mitad de por qué este diseño es barato: las otras
+-- dos funciones ya lo aceptan sin tocarles una línea. `attach_subscription_checkout`
+-- filtra por `status <> 'canceled'` e `incomplete` pasa; `apply_subscription_payment`
+-- rechaza sólo `canceled` y después escribe `active`, que es exactamente la
+-- transición que tiene que hacer el primer cobro del que vuelve.
+--
+-- POR QUÉ ESTÁ SOLO EN ESTE ARCHIVO. Postgres no deja USAR un valor de enum en
+-- la misma transacción que lo agregó, y cada migración corre en una. El índice
+-- parcial de la migración siguiente lleva el literal `'incomplete'` en su
+-- cláusula `where`, o sea que lo usa al crearse: junto acá, esta migración
+-- falla con "unsafe use of new value of enum type". Son dos archivos por una
+-- regla del motor, no por gusto.
+-- ============================================================
+
+alter type public.subscription_status add value if not exists 'incomplete';

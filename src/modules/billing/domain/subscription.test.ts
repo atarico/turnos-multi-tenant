@@ -228,4 +228,50 @@ describe("takesNewBookings", () => {
   it("sin suscripción no toma turnos", () => {
     expect(takesNewBookings(null, NOW)).toBe(false);
   });
+
+  /**
+   * LA FILA DEL RE-ALTA NO HABILITA NADA.
+   *
+   * `incomplete` es la suscripción que el checkout abre para tener a qué atar
+   * el preapproval, y existe desde el instante en que el dueño aprieta
+   * "Contratar" hasta que el webhook confirma el cobro — o para siempre, si
+   * abandona el checkout. Si entrara acá, cualquiera que apretara el botón y
+   * cerrara la pestaña se llevaría el producto gratis.
+   *
+   * Hoy cae del lado del NO por el `return` final y no por un `if` propio, y
+   * ese es justamente el motivo de este test: es un comportamiento que nadie
+   * escribió a mano, así que nada avisa el día que alguien reordene la
+   * función.
+   */
+  it("la fila del re-alta, sin cobro confirmado, no toma turnos", () => {
+    expect(
+      takesNewBookings(
+        {
+          status: "incomplete",
+          trialEndsAt: null,
+          currentPeriodEnd: daysFromNow(-1),
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * Y tampoco con una fecha futura encima. Es el caso que atrapa a quien
+   * "arregle" el período de relleno de `open_subscription_for_charge` moviendo
+   * `current_period_end` hacia adelante: lo que decide acá es el ESTADO, no la
+   * fecha, porque todavía no entró un peso.
+   */
+  it("ni siquiera con el período apuntando al futuro", () => {
+    expect(
+      takesNewBookings(
+        {
+          status: "incomplete",
+          trialEndsAt: null,
+          currentPeriodEnd: daysFromNow(30),
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
 });

@@ -26,12 +26,19 @@ export const metadata: Metadata = { title: "Negocio" };
  * pero el servicio sigue andando durante la gracia, y es justo el estado sobre
  * el que el operador tiene algo que hacer. Mostrarlo como "al día" escondería
  * a la única persona a la que hay que llamar.
+ *
+ * `incomplete` es el otro estado accionable, y por el motivo opuesto: el
+ * negocio volvió, eligió un plan y el cobro nunca entró. No está pagando y
+ * tampoco está usando el producto — se quedó en el medio, y desde acá se lo
+ * ve. Por eso dice "sin confirmar" y no "pendiente": lo que falta no es que
+ * pase el tiempo, es que alguien lo llame.
  */
 const STATUS_LABELS: Record<SubscriptionStatus, string> = {
   trialing: "Prueba gratis",
   active: "Al día",
   past_due: "Cobro atrasado",
   canceled: "Cancelada",
+  incomplete: "Alta sin confirmar",
 };
 
 const STATUS_VARIANTS: Record<
@@ -42,6 +49,10 @@ const STATUS_VARIANTS: Record<
   active: "gold",
   past_due: "danger",
   canceled: "muted",
+  // Ni `danger` ni `muted`: no es una falla del negocio ni algo terminado, es
+  // una venta a mitad de camino. `info` es lo que se le pone a algo que está
+  // pasando ahora.
+  incomplete: "info",
 };
 
 interface AdminTenantDetailPageProps {

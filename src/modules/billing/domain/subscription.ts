@@ -6,12 +6,20 @@ import type { PlanTier } from "@/modules/tenants/domain/types";
  * `past_due` es su propio estado y no un `active` con una bandera: el cobro
  * falló pero el servicio sigue andando durante la gracia. Colapsarlo contra
  * `active` haría imposible saber a quién avisarle.
+ *
+ * `incomplete` es la fila que existe para cobrar y todavía no cobró: la abre
+ * el re-alta cuando un negocio dado de baja vuelve a elegir un plan. No
+ * habilita nada —eso lo hace el webhook cuando el pago entra— y es el único
+ * estado que NO se le puede dar a un negocio que nunca pagó, porque sería
+ * regalarle una segunda prueba gratis por la puerta de atrás. Ver
+ * `20260907120001_subscription_incomplete_status.sql`.
  */
 export type SubscriptionStatus =
   | "trialing"
   | "active"
   | "past_due"
-  | "canceled";
+  | "canceled"
+  | "incomplete";
 
 /** Una suscripción. Espeja la tabla `public.subscriptions`. */
 export interface Subscription {
@@ -134,6 +142,14 @@ export function takesNewBookings(
     return subscription.currentPeriodEnd.getTime() > now.getTime();
   }
 
+  // Queda `active`, `past_due` e `incomplete`, y sólo los dos primeros entran.
+  //
+  // `incomplete` cae del lado del NO sin un `if` propio: es la fila del re-alta
+  // y no habilita nada hasta que el webhook confirme el cobro. Dejarla entrar
+  // acá le regalaría el producto a cualquiera que apriete "Contratar" y no
+  // termine de pagar. Espeja `tenant_takes_bookings()`, que enumera los
+  // estados que SÍ habilitan y por eso tampoco lo nombra.
+  //
   // `past_due` entra: el cobro falló pero Mercado Pago lo sigue reintentando y
   // el servicio anda durante la gracia. Espeja `LIVE_STATUSES`.
   //
