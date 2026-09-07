@@ -110,6 +110,18 @@ export default async function SuscripcionPage({
   const canCancel = paying;
 
   const canceled = subscription?.status === "canceled";
+
+  /**
+   * El alta que se empezó y no se terminó de pagar.
+   *
+   * Existe desde que el dueño aprieta "Contratar" hasta que el webhook
+   * confirma el cobro — o para siempre, si abandona el checkout. Hay que
+   * contarla porque `getCurrentSubscription` trae LA MÁS NUEVA: apenas se abre
+   * esta fila, la pantalla deja de leer la `canceled` que la precedía, y sin
+   * este cartel el dueño vuelve una semana después y no encuentra un solo
+   * rastro de lo que le pasó ni de por qué no le entran turnos.
+   */
+  const awaitingFirstCharge = subscription?.status === "incomplete";
   // Y una baja con el período todavía corriendo NO es lo mismo que una vencida:
   // en la primera sigue entrando trabajo, en la segunda no. Decir lo mismo en
   // las dos es mentirle a una de las dos.
@@ -199,6 +211,20 @@ export default async function SuscripcionPage({
               recibir reservas, elegí un plan.
             </>
           )}
+        </p>
+      )}
+
+      {/* EL ALTA A MEDIO CAMINO. Dice las dos cosas que el dueño necesita: que
+          no está tomando turnos, y que lo que falta es el cobro y no un
+          trámite nuestro. Y no promete una activación automática que dependa
+          del tiempo: si abandonó el checkout, no va a entrar nunca solo. */}
+      {awaitingFirstCharge && (
+        <p className="mt-4 rounded-xl border border-border bg-surface-2 px-3.5 py-3 text-sm text-muted">
+          Empezaste a contratar un plan y <b>todavía no nos entró el cobro</b>,
+          así que <b>no estás tomando turnos nuevos</b>. Tu agenda sigue ahí:
+          podés verla, cerrarla y reprogramarla. Si ya pagaste, se activa solo
+          en unos minutos; si no llegaste a terminar, elegí tu plan de nuevo acá
+          abajo.
         </p>
       )}
 

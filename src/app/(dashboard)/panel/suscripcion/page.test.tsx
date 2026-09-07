@@ -543,4 +543,57 @@ describe("baja de suscripción", () => {
 
     expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
   });
+
+  /**
+   * EL HUECO QUE ABRE EL RE-ALTA, y que no existe hasta que existe el re-alta.
+   *
+   * Apenas el dueño aprieta "Contratar", el checkout le abre una fila
+   * `incomplete` — y `getCurrentSubscription` trae LA MÁS NUEVA, así que a
+   * partir de ese instante la pantalla deja de leer la fila `canceled`. Si
+   * abandona el pago y vuelve una semana después, sin este cartel no encuentra
+   * un solo rastro: no dice que se dio de baja (esa fila ya no es la que se
+   * lee), no dice que está pagando (no entró nada), y no explica por qué no le
+   * entran turnos. Se queda mirando los planes sin saber qué le pasó.
+   */
+  it("con el alta sin confirmar dice que el cobro todavía no entró", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date(Date.now() - 2 * DAY),
+        currentPeriodEnd: new Date(Date.now() - DAY),
+      }),
+    );
+
+    expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+  });
+
+  /**
+   * Y NO le ofrece la baja. No hay nada que dar de baja —el cobro nunca
+   * entró—, y un botón que promete "no se te va a cobrar más" sobre algo que
+   * no cobra contesta una pregunta que nadie hizo, con una acción que
+   * `cancel_subscription()` ni siquiera aplica sobre esta fila.
+   */
+  it("con el alta sin confirmar no ofrece la baja", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * Y el botón de contratar SIGUE disponible. Es el reintento: el dueño que
+   * abandonó el checkout tiene que poder volver a apretar, y la fila
+   * `incomplete` que ya tiene se reusa en vez de abrirle un segundo cobro.
+   */
+  it("con el alta sin confirmar todavía deja contratar", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.getByRole("button", { name: /contratar pro/i }),
+    ).toBeEnabled();
+  });
 });

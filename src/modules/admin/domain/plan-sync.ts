@@ -15,11 +15,19 @@ import type { PlanTier } from "@/modules/tenants/domain/types";
  * es invisible salvo que alguien ponga las dos columnas una al lado de la otra
  * —que es exactamente lo que hace el detalle del negocio.
  *
- * Una suscripción CANCELADA queda afuera a propósito. Su plan es historia, no
- * una promesa vigente: alguien que cancela premium y cae a básico deja este
- * mismo cuadro y está bien. Sin esa rama, todo negocio que alguna vez bajó de
- * plan quedaría marcado para siempre, y una alarma que suena cuando no pasa
- * nada deja de mirarse — el día que la discrepancia sea real, nadie la ve.
+ * Dos estados quedan afuera a propósito, por motivos espejo:
+ *
+ *   · CANCELADA: su plan es historia, no una promesa vigente. Alguien que
+ *     cancela premium y cae a básico deja este mismo cuadro y está bien.
+ *   · SIN CONFIRMAR (`incomplete`): su plan no es historia, es una INTENCIÓN.
+ *     Es la fila que abre el re-alta con el plan que el dueño acaba de
+ *     apretar, mientras `tenants.plan` sigue siendo el que tenía porque
+ *     todavía no entró un peso. Las dos columnas dicen la verdad.
+ *
+ * Sin estas dos ramas, todo negocio que alguna vez bajó de plan —y todo dueño
+ * que abandona el checkout, que son muchos— quedaría marcado, y una alarma que
+ * suena cuando no pasa nada deja de mirarse: el día que la discrepancia sea
+ * real, nadie la ve.
  */
 export function planIsOutOfSync(
   tenantPlan: PlanTier,
@@ -27,5 +35,6 @@ export function planIsOutOfSync(
 ): boolean {
   if (!subscription) return false;
   if (subscription.status === "canceled") return false;
+  if (subscription.status === "incomplete") return false;
   return subscription.plan !== tenantPlan;
 }
