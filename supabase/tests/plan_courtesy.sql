@@ -118,23 +118,32 @@ end $$;
 --         desde una sesión sin tocar otra migración. Si esto
 --         falla, la cortesía se puede otorgar por PATCH y el
 --         registro de quién y por qué es decorativo.
+--
+--         EL ACTOR ES EL DUEÑO, no un super admin. Lo era hasta
+--         20260908120001, cuando el operador tenía escritura sobre
+--         cualquier negocio y servía de actor cómodo. Ya no la
+--         tiene, y usarlo acá mezclaría dos rejas distintas: el
+--         rechazo vendría del aislamiento y no de la columna, que
+--         es lo único que este caso quiere probar. El dueño alcanza
+--         su propia fila y por eso aísla la columna limpio.
 -- ------------------------------------------------------------
 do $$
 declare
-  v_admin     uuid;
+  v_dueno     uuid;
   v_tenant    uuid;
   v_color     text;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cort-patch@test.com') returning id into v_admin;
-  insert into public.platform_admins (user_id, note) values (v_admin, 'test');
+  insert into auth.users (email) values ('cort-patch@test.com') returning id into v_dueno;
   insert into public.tenants (slug, name, country)
     values ('cort-tres', 'Negocio Tres', 'AR') returning id into v_tenant;
+  insert into public.memberships (user_id, tenant_id, role)
+    values (v_dueno, v_tenant, 'owner');
 
-  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  perform set_config('request.jwt.claim.sub', v_dueno::text, true);
   set local role authenticated;
 
-  -- Control positivo: el operador alcanza la fila, así que el rechazo de abajo
+  -- Control positivo: el dueño alcanza la fila, así que el rechazo de abajo
   -- es por columna y no por aislamiento.
   update public.tenants set brand_color = '#111111' where id = v_tenant;
 
