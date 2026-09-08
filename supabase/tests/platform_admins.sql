@@ -1,5 +1,19 @@
 -- ============================================================
 -- Test SQL para 20260828120003_platform_admins.sql
+--                y 20260908120001_super_admin_reads_the_list_only.sql
+--
+-- LA SEGUNDA MIGRACIÓN DIO VUELTA LA MITAD DE ESTE ARCHIVO, y conviene saberlo
+-- antes de leerlo. 20260828120003 metió el alcance del operador ADENTRO de
+-- `auth_tenant_ids()`, así que las 30 policies que la llaman lo heredaban:
+-- lectura y escritura sobre cada fila de cada negocio. 20260908120001 lo sacó
+-- de ahí y lo declaró policy por policy, en las dos que el panel necesita.
+--
+-- Los casos 2, 6, 9 y 10 afirmaban el alcance viejo y hoy afirman el nuevo. No
+-- se borraron: un caso que decía "el admin ve el catálogo ajeno" y ahora dice
+-- "no lo ve" es el mismo caso probando la misma frontera desde el otro lado, y
+-- deja escrito qué cambió y por qué. Los casos 11 y 12 se agregaron para las
+-- dos mitades nuevas — lo que el operador SÍ sigue viendo, y lo que dejó de
+-- ver.
 --
 -- Misma convención que close_only_ended_bookings.sql: assertions con
 -- `do $$ ... raise exception ... $$`, cada bloque arma sus propios datos,
@@ -22,6 +36,11 @@
 --    desde afuera se ven igual. Cada bloque que espera "no ve nada" lleva al
 --    lado un control positivo que sí tiene que ver algo, y las búsquedas de
 --    fixture chequean que encontraron fila.
+--
+--    Desde 20260908120001 varios bloques esperan "no ve nada" del OPERADOR, y
+--    ahí el control positivo no puede ser del mismo actor —sería contradecir
+--    la afirmación—. Es una consulta directa, sin rol, que confirma que la
+--    fila existe de verdad: el Caso 6 cuenta el servicio, el 12 el turno.
 --
 -- Uso:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/platform_admins.sql
@@ -66,8 +85,19 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 2: un super admin ve TODOS los negocios, incluidos los
---         que nacieron después de que se lo nombró admin.
+-- Caso 2: `auth_tenant_ids()` NO conoce al super admin.
+--
+--         Hasta 20260908120001 esta función tenía una rama que le
+--         devolvía TODOS los negocios, y las 30 policies que la
+--         llaman heredaban ese alcance sin nombrarlo. Ahora la
+--         función significa una sola cosa —"de qué negocios sos
+--         miembro"— y el alcance del operador está declarado policy
+--         por policy, en las dos que lo necesitan.
+--
+--         Este caso es el que cierra la puerta: si alguien devuelve
+--         la rama, acá se entera. El Caso 8 prueba el otro lado —que
+--         el panel SIGUE viendo la lista— y los dos juntos son el
+--         cambio entero.
 -- ------------------------------------------------------------
 do $$
 declare
@@ -78,18 +108,19 @@ begin
   insert into auth.users (email) values ('root@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id) values (v_admin);
 
-  -- Un negocio nuevo, creado DESPUÉS del alta del admin: no hace falta
-  -- mantener ninguna fila de membresía para que lo vea.
   insert into public.tenants (slug, name, country) values ('pa-tres', 'Negocio C', 'AR');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   select count(*) into v_visible from public.auth_tenant_ids();
   select count(*) into v_total   from public.tenants;
 
-  if v_visible <> v_total then
-    raise exception 'Caso 2: el super admin debía ver los % negocios, vio %', v_total, v_visible;
+  -- No es miembro de ninguno, así que la función no le da ninguno.
+  if v_visible <> 0 then
+    raise exception
+      'Caso 2: auth_tenant_ids() le dio % negocios al super admin; volvió la rama ancha',
+      v_visible;
   end if;
-  -- Anti-vacuidad: si el fixture se vaciara, "los ve a todos" sería trivial.
+  -- Anti-vacuidad: si el fixture se vaciara, "no ve ninguno" sería trivial.
   if v_total < 3 then
     raise exception 'Caso 2: el fixture esperaba al menos 3 negocios, hay %', v_total;
   end if;
@@ -196,9 +227,18 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 6: el super admin atraviesa una policy REAL de otro negocio.
---         Los casos anteriores prueban la función; éste prueba que
---         las policies existentes de verdad la heredan.
+-- Caso 6: el super admin NO entra al catálogo de otro negocio.
+--
+--         Antes de 20260908120001 sí entraba, y era el ejemplo que
+--         probaba que las policies heredaban la rama ancha. Ahora
+--         prueba lo contrario, que es el issue #50: el operador ve la
+--         LISTA de negocios, no el adentro de ninguno.
+--
+--         `services` es el representante de las seis tablas que
+--         perdieron al operador —bookings, staff, staff_services,
+--         staff_availability, services y el bucket de logos—. Todas
+--         dependen de la MISMA función, así que si vuelve a entrar
+--         acá, vuelve a entrar en todas.
 --
 --         El `grant select on services` lo pone el bloque porque el
 --         Postgres descartable no trae los default privileges que
@@ -212,6 +252,7 @@ declare
   v_dueno  uuid;
   v_ajeno  uuid;
   v_visto  int;
+  v_real   int;
 begin
   insert into auth.users (email) values ('root6@test.com') returning id into v_admin;
   insert into auth.users (email) values ('dueno6@test.com') returning id into v_dueno;
@@ -226,7 +267,6 @@ begin
 
   grant select on public.services to authenticated;
 
-  -- El admin NO es miembro de ese negocio y aun así lee su catálogo.
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
   select count(*) into v_visto from public.services where tenant_id = v_ajeno;
@@ -234,8 +274,15 @@ begin
 
   revoke select on public.services from authenticated;
 
-  if v_visto <> 1 then
-    raise exception 'Caso 6: el super admin debía ver 1 servicio ajeno, vio %', v_visto;
+  -- Anti-vacuidad: la fila TIENE que existir, o "no vio nada" no prueba nada.
+  select count(*) into v_real from public.services where tenant_id = v_ajeno;
+
+  if v_real <> 1 then
+    raise exception 'Caso 6: el fixture no dejó el servicio ajeno; el test no probaría nada';
+  end if;
+  if v_visto <> 0 then
+    raise exception
+      'Caso 6: el super admin leyó % servicio(s) de un negocio ajeno', v_visto;
   end if;
 end $$;
 
@@ -350,18 +397,26 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 9: el super admin ESCRIBE en un negocio ajeno.
+-- Caso 9: EL QUE MÁS IMPORTA — el super admin NO ESCRIBE en un
+--         negocio ajeno.
 --
---         La migración declara que el alcance es lectura Y
---         escritura, a propósito, porque varias policies son
---         `for all`. Sin este bloque esa mitad quedaba sin probar.
+--         20260828120003 declaraba el alcance como lectura Y
+--         escritura, a propósito: varias policies son `for all`. Ésa
+--         es la mitad que el issue #50 llamaba por su nombre — un
+--         operador podía editar o borrar los turnos y el personal de
+--         cualquier negocio, y no lo frenaba nada más que la ausencia
+--         de una pantalla.
+--
+--         Lo que el operador SÍ hace hoy —cortesías y cupones— pasa
+--         por funciones `security definer` que chequean
+--         `is_super_admin()` adentro y dejan registro. Esta escritura
+--         ancha era la segunda puerta al mismo cuarto, sin registro.
 -- ------------------------------------------------------------
 do $$
 declare
-  v_admin   uuid;
-  v_ajeno   uuid;
-  v_creo    int;
-  v_vecino  uuid;
+  v_admin    uuid;
+  v_ajeno    uuid;
+  v_creo     int;
   v_escribio boolean := false;
 begin
   insert into auth.users (email) values ('root9@test.com') returning id into v_admin;
@@ -376,34 +431,29 @@ begin
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
-  insert into public.services (tenant_id, name, duration_min)
-    values (v_ajeno, 'Servicio puesto por el admin', 45);
-  select count(*) into v_creo from public.services
-    where tenant_id = v_ajeno and name = 'Servicio puesto por el admin';
-  reset role;
-
-  -- Control: un usuario cualquiera NO puede hacer lo mismo. La escritura
-  -- ajena es del admin, no de todo el mundo.
-  select user_id into v_vecino from public.memberships
-    where tenant_id <> v_ajeno limit 1;
-  perform set_config('request.jwt.claim.sub', v_vecino::text, true);
-  set local role authenticated;
   begin
     insert into public.services (tenant_id, name, duration_min)
-      values (v_ajeno, 'Servicio colado', 45);
+      values (v_ajeno, 'Servicio puesto por el admin', 45);
     v_escribio := true;
   exception
+    -- La RLS rechaza un INSERT que no pasa el `with check` con este mismo
+    -- código. Se atrapa por código y no con `when others` para no tragarse
+    -- un fallo distinto —una columna que falta, por ejemplo— y leerlo como
+    -- si la reja hubiera funcionado.
     when insufficient_privilege then null;
   end;
   reset role;
 
   revoke select, insert on public.services from authenticated;
 
-  if v_creo <> 1 then
-    raise exception 'Caso 9: el admin debía poder crear un servicio ajeno, quedaron % filas', v_creo;
-  end if;
+  select count(*) into v_creo from public.services
+    where tenant_id = v_ajeno and name = 'Servicio puesto por el admin';
+
   if v_escribio then
-    raise exception 'Caso 9: un usuario común escribió en un negocio ajeno';
+    raise exception 'Caso 9: el super admin pudo INSERTAR en un negocio ajeno';
+  end if;
+  if v_creo <> 0 then
+    raise exception 'Caso 9: quedaron % filas escritas por el admin en un negocio ajeno', v_creo;
   end if;
 end $$;
 
@@ -414,14 +464,19 @@ end $$;
 --          con efecto en la próxima consulta —ése es el argumento
 --          por el que se eligió una tabla y no un claim en el JWT.
 --          Acá se ejerce la dirección de vuelta, en la misma sesión.
+--
+--          Se mide contra la POLICY de `tenants` y ya no contra
+--          `auth_tenant_ids()`: desde 20260908120001 la función no
+--          sabe del operador, así que medirla ahí no probaría la
+--          revocación, probaría el cambio de la función.
 -- ------------------------------------------------------------
 do $$
 declare
-  v_ex     uuid;
-  v_suyo   uuid;
-  v_antes  int;
+  v_ex      uuid;
+  v_suyo    uuid;
+  v_antes   int;
   v_despues int;
-  v_total  int;
+  v_total   int;
 begin
   insert into auth.users (email) values ('ex@test.com') returning id into v_ex;
   insert into public.tenants (slug, name, country)
@@ -431,19 +486,131 @@ begin
 
   insert into public.platform_admins (user_id) values (v_ex);
 
-  perform set_config('request.jwt.claim.sub', v_ex::text, true);
-  select count(*) into v_antes from public.auth_tenant_ids();
   select count(*) into v_total from public.tenants;
+
+  -- El grant lo pone el bloque porque el Postgres descartable no trae los
+  -- default privileges que Supabase ya aplicó. Mismo motivo que el Caso 8:
+  -- lo que se prueba acá es la capa de POLICY, no la de GRANT.
+  grant select on public.tenants to authenticated;
+
+  perform set_config('request.jwt.claim.sub', v_ex::text, true);
+  set local role authenticated;
+  select count(*) into v_antes from public.tenants;
+  reset role;
 
   delete from public.platform_admins where user_id = v_ex;
 
-  select count(*) into v_despues from public.auth_tenant_ids();
+  set local role authenticated;
+  select count(*) into v_despues from public.tenants;
+  reset role;
+
+  revoke select on public.tenants from authenticated;
 
   if v_antes <> v_total then
     raise exception 'Caso 10: como admin debía ver los % negocios, vio %', v_total, v_antes;
   end if;
   if v_despues <> 1 then
     raise exception 'Caso 10: revocado debía volver a su único negocio, vio %', v_despues;
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- Caso 11: el operador SÍ ve las suscripciones de todos.
+--
+--          Es la otra mitad de lo que el panel necesita, y la que
+--          contesta las preguntas por las que existe: quién está en
+--          prueba, a quién le falló el cobro, quién se dio de baja.
+--          Sin esta policy el detalle del negocio queda vacío.
+-- ------------------------------------------------------------
+do $$
+declare
+  v_admin uuid;
+  v_ajeno uuid;
+  v_ve    int;
+  v_total int;
+begin
+  insert into auth.users (email) values ('root11@test.com') returning id into v_admin;
+  insert into public.platform_admins (user_id) values (v_admin);
+
+  -- El fixture inserta los negocios a mano, sin pasar por `create_business`,
+  -- así que no hay ninguna suscripción hasta que este bloque la ponga. Lo
+  -- descubrió el guardián anti-vacuidad de más abajo, que es para lo que está.
+  select id into v_ajeno from public.tenants where slug = 'pa-ajeno';
+  insert into public.subscriptions (
+    tenant_id, plan, status, current_period_end, price_usd_cents
+  ) values (
+    v_ajeno, 'pro', 'active', now() + interval '25 days', 3500
+  );
+
+  grant select on public.subscriptions to authenticated;
+
+  select count(*) into v_total from public.subscriptions;
+
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  set local role authenticated;
+  select count(*) into v_ve from public.subscriptions;
+  reset role;
+
+  revoke select on public.subscriptions from authenticated;
+
+  if v_total < 1 then
+    raise exception 'Caso 11: el fixture no dejó ninguna suscripción; el test no probaría nada';
+  end if;
+  if v_ve <> v_total then
+    raise exception 'Caso 11: el operador debía ver las % suscripciones, vio %', v_total, v_ve;
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
+-- Caso 12: y NO ve la agenda de nadie.
+--
+--          `bookings` es lo más sensible que hay en la base —nombres
+--          y teléfonos de los clientes de otro— y era alcanzable con
+--          un `fetch` desde la consola del browser. Es la tabla que
+--          el issue #50 nombra primero.
+-- ------------------------------------------------------------
+do $$
+declare
+  v_admin  uuid;
+  v_ajeno  uuid;
+  v_staff  uuid;
+  v_serv   uuid;
+  v_ve     int;
+  v_real   int;
+begin
+  insert into auth.users (email) values ('root12@test.com') returning id into v_admin;
+  insert into public.platform_admins (user_id) values (v_admin);
+
+  select id into v_ajeno from public.tenants where slug = 'pa-ajeno';
+  select id into v_serv  from public.services where tenant_id = v_ajeno limit 1;
+  insert into public.staff (tenant_id, name) values (v_ajeno, 'Ana') returning id into v_staff;
+
+  insert into public.bookings (
+    tenant_id, staff_id, service_id, starts_at, ends_at,
+    customer_name, customer_phone
+  ) values (
+    v_ajeno, v_staff, v_serv,
+    now() + interval '2 days', now() + interval '2 days 30 minutes',
+    'Cliente Ajeno', '1122334455'
+  );
+
+  grant select on public.bookings to authenticated;
+
+  select count(*) into v_real from public.bookings where tenant_id = v_ajeno;
+
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  set local role authenticated;
+  select count(*) into v_ve from public.bookings where tenant_id = v_ajeno;
+  reset role;
+
+  revoke select on public.bookings from authenticated;
+
+  if v_real < 1 then
+    raise exception 'Caso 12: el fixture no dejó ningún turno; el test no probaría nada';
+  end if;
+  if v_ve <> 0 then
+    raise exception
+      'Caso 12: el operador leyó % turno(s) ajenos, con nombre y teléfono del cliente', v_ve;
   end if;
 end $$;
 
