@@ -156,14 +156,27 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- Caso 4: un SUPER ADMIN tampoco escribe el plan a mano.
+-- Caso 4: un SUPER ADMIN ya no llega a la fila, y aunque llegara
+--         tampoco escribiría el plan. DOS REJAS, y las dos se
+--         prueban acá.
 --
---         auth_tenant_ids() le devuelve todos los negocios, así
---         que la policy lo deja pasar sobre cualquier fila. Lo
---         que lo frena es el grant, y tiene que frenarlo: una
---         cortesía que se otorga con un PATCH suelto no deja
---         registro de quién la dio ni por qué. Eso va a salir
---         por una función security definer, no por acá.
+--         Hasta 20260908120001 este caso decía otra cosa:
+--         `auth_tenant_ids()` le devolvía todos los negocios, la
+--         policy lo dejaba pasar sobre cualquier fila, y lo único
+--         que lo frenaba era el grant de columna. Ésa era la reja
+--         que el issue #50 encontró demasiado sola.
+--
+--         Ahora el operador no pasa la policy de UPDATE —su alcance
+--         quedó declarado sólo en las dos de SELECT que el panel
+--         necesita— y el grant sigue detrás por si alguien devuelve
+--         la rama ancha. Que las dos fallen a la vez es lo que hace
+--         falta para que una cortesía se pueda otorgar por PATCH.
+--
+--         El control positivo del grant NO vive más acá: se movió a
+--         los casos de arriba, donde el actor es el dueño y alcanza
+--         su propia fila. Acá el "no alcanza la fila" ES la
+--         afirmación, así que un control positivo del mismo actor
+--         sería contradictorio.
 -- ------------------------------------------------------------
 do $$
 declare
@@ -171,21 +184,27 @@ declare
   v_tenant    uuid;
   v_plan      public.plan_tier;
   v_color     text;
+  v_tocadas   int;
   v_rechazado boolean := false;
 begin
   insert into auth.users (email) values ('admin@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
-  insert into public.tenants (slug, name, country)
-    values ('grants-ajeno', 'Negocio Ajeno', 'AR') returning id into v_tenant;
+  insert into public.tenants (slug, name, country, brand_color)
+    values ('grants-ajeno', 'Negocio Ajeno', 'AR', '#aaaaaa') returning id into v_tenant;
   -- Sin membership: el operador no es miembro de ningún negocio, por diseño.
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
 
-  -- Control positivo: el operador SÍ alcanza esta fila (RLS lo deja), así que
-  -- el rechazo de abajo es por columna y no por aislamiento.
+  -- REJA 1, la nueva: la policy de UPDATE no lo deja alcanzar la fila. La RLS
+  -- no tira sobre un UPDATE, simplemente no matchea ninguna fila — por eso se
+  -- cuenta y no se atrapa una excepción.
   update public.tenants set brand_color = '#0f0f0f' where id = v_tenant;
+  get diagnostics v_tocadas = row_count;
 
+  -- REJA 2, la de antes: aunque la policy lo dejara pasar, la columna no está
+  -- grantada. Esto SÍ tira, y tira aun con cero filas: el privilegio de
+  -- columna se chequea antes de mirar qué filas matchean.
   begin
     update public.tenants set plan = 'premium' where id = v_tenant;
   exception when insufficient_privilege then
@@ -193,6 +212,12 @@ begin
   end;
 
   reset role;
+
+  if v_tocadas <> 0 then
+    raise exception
+      'CASO 4: el super admin alcanzó % fila(s) ajenas para UPDATE; volvió la rama ancha',
+      v_tocadas;
+  end if;
 
   if not v_rechazado then
     raise exception 'CASO 4: el super admin PUDO escribir tenants.plan con un update pelado.';
@@ -204,8 +229,8 @@ begin
   if v_plan <> 'basico' then
     raise exception 'CASO 4: el plan quedó en %.', v_plan;
   end if;
-  if v_color is distinct from '#0f0f0f' then
-    raise exception 'CASO 4: el control positivo falló: el operador ni siquiera alcanzaba la fila, así que el rechazo no prueba nada sobre la columna.';
+  if v_color <> '#aaaaaa' then
+    raise exception 'CASO 4: el color ajeno quedó en %; alguien escribió igual.', v_color;
   end if;
 end $$;
 
