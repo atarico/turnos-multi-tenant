@@ -21,8 +21,12 @@ export const metadata: Metadata = {
     default: "Turnos — Reservas online para profesionales",
     template: "%s · Turnos",
   },
+  // Lo que Google indexa y lo primero que alguien lee de nosotros. Nombra
+  // sólo lo que el producto hace hoy: Stripe y los recordatorios por WhatsApp
+  // están anunciados en la home como próximamente, y un resultado de búsqueda
+  // no tiene dónde poner ese matiz.
   description:
-    "La plataforma de reservas para tu negocio. Calendario, pagos con Mercado Pago y Stripe, y recordatorios por WhatsApp. Todo en tu marca.",
+    "La plataforma de reservas para tu negocio. Calendario, agenda online y cobros con Mercado Pago. Todo en tu marca.",
 };
 
 export default function RootLayout({

@@ -4,6 +4,10 @@ import { CalendarCheck, Link2, Scissors, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  ONBOARDING_PATH,
+  landingWithoutTenant,
+} from "@/modules/admin/application/landing";
 import { getCurrentUserName } from "@/modules/auth/application/queries";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { OnboardingForm } from "@/modules/tenants/ui/onboarding-form";
@@ -34,6 +38,13 @@ export default async function WelcomePage() {
 
   // Guard de ruta: un negocio ya creado no tiene nada que hacer acá.
   if (tenant) redirect("/panel");
+
+  // Y tampoco lo tiene un operador de plataforma, que no tiene negocio pero no
+  // vino a crear uno. Se compara contra esta misma ruta en vez de preguntar por
+  // el rol: así el día que aparezca un tercer caso, esta pantalla lo obedece
+  // sola y no hay dos lugares donde acordarse de agregarlo.
+  const landing = await landingWithoutTenant();
+  if (landing !== ONBOARDING_PATH) redirect(landing);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col justify-center gap-16 px-6 py-12">

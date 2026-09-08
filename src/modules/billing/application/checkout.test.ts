@@ -16,8 +16,15 @@ import { startCheckout } from "./checkout";
 
 const rpc = vi.fn();
 
+/**
+ * Lo que devuelve `redeem_coupon`. `null` es el cupón que no sirve, y cubre los
+ * cuatro motivos —no existe, apagado, vencido, agotado— porque la función de la
+ * base los colapsa a propósito.
+ */
+let couponDiscount: number | null = null;
+
 vi.mock("./queries", () => ({
-  getLiveSubscriptionIdForCharge: vi.fn(),
+  openSubscriptionForCharge: vi.fn(),
 }));
 vi.mock("./fx", () => ({ quoteUsdToArs: vi.fn() }));
 vi.mock("./mercadopago", () => ({ createPreapproval: vi.fn() }));
@@ -25,7 +32,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({ rpc }),
 }));
 
-const { getLiveSubscriptionIdForCharge } = await import("./queries");
+const { openSubscriptionForCharge } = await import("./queries");
 const { quoteUsdToArs } = await import("./fx");
 const { createPreapproval } = await import("./mercadopago");
 
@@ -57,10 +64,20 @@ beforeEach(() => {
   // NO se ejecutó— pasarían a fallar por lo que hizo el test anterior.
   vi.clearAllMocks();
 
-  vi.mocked(getLiveSubscriptionIdForCharge).mockResolvedValue(ok(SUBSCRIPTION_ID));
+  vi.mocked(openSubscriptionForCharge).mockResolvedValue(ok(SUBSCRIPTION_ID));
   vi.mocked(quoteUsdToArs).mockResolvedValue(ok(quote));
   vi.mocked(createPreapproval).mockResolvedValue(ok(session));
-  rpc.mockResolvedValue({ data: true, error: null });
+  couponDiscount = null;
+  // El mismo `rpc` atiende dos funciones distintas, así que despacha por
+  // nombre. Devolver `true` para todo haría que un canje inválido pareciera un
+  // descuento de `true` y el test no probaría nada del camino del cupón.
+  rpc.mockImplementation((fn: string) =>
+    Promise.resolve(
+      fn === "redeem_coupon"
+        ? { data: couponDiscount, error: null }
+        : { data: true, error: null },
+    ),
+  );
 });
 
 describe("startCheckout", () => {
@@ -68,6 +85,22 @@ describe("startCheckout", () => {
     const result = await startCheckout(params);
 
     expect(result.ok && result.value.initPoint).toBe(session.initPoint);
+  });
+
+  /**
+   * El plan viaja al primer paso, y no es un detalle de plomería: ese paso es
+   * el que abre la fila del re-alta cuando el negocio se había dado de baja, y
+   * `subscriptions.plan` es `not null`. Sin el plan que el dueño acaba de
+   * apretar, la fila nace con uno inventado — y si el checkout falla en el
+   * medio, se queda con ése.
+   */
+  it("le pasa el plan elegido al paso que abre la suscripción", async () => {
+    await startCheckout(params);
+
+    expect(openSubscriptionForCharge).toHaveBeenCalledWith(
+      params.tenantId,
+      "pro",
+    );
   });
 
   /**
@@ -126,6 +159,10 @@ describe("startCheckout", () => {
       p_fx_quoted_at: quote.quotedAt.toISOString(),
       p_provider: "mercadopago",
       p_provider_subscription_id: session.providerSubscriptionId,
+      // Sin cupón viajan explícitos en null, no ausentes: el CHECK de
+      // `subscription_provider_refs` exige los dos o ninguno.
+      p_coupon_code: null,
+      p_discount_bps: null,
     });
   });
 
@@ -159,7 +196,7 @@ describe("startCheckout", () => {
     ["no hay suscripción", appError("subscription_not_found", "…")],
     ["la base no contestó", appError("subscription_query_failed", "…")],
   ])("si %s no se abre nada en la pasarela", async (_caso, error) => {
-    vi.mocked(getLiveSubscriptionIdForCharge).mockResolvedValue(err(error));
+    vi.mocked(openSubscriptionForCharge).mockResolvedValue(err(error));
 
     const result = await startCheckout(params);
 
@@ -326,5 +363,97 @@ describe("startCheckout", () => {
 
     expect(!result.ok && result.error.code).toBe("price_conversion_failed");
     expect(vi.mocked(createPreapproval)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El cupón, que es lo único que puede cambiar el monto DESPUÉS de cotizar.
+   *
+   * Lo que se cuida acá es el orden y el corte: el canje ocurre antes de abrir
+   * el preapproval —no hay forma de descontar después— y un código que no sirve
+   * frena todo en vez de seguir al precio de lista.
+   */
+  describe("con cupón", () => {
+    it("manda a la pasarela el monto YA rebajado", async () => {
+      couponDiscount = 9900;
+
+      await startCheckout({ ...params, couponCode: "BETA99" });
+
+      // 4.550.000 centavos - 99% = 45.500 centavos.
+      expect(createPreapproval).toHaveBeenCalledWith(
+        expect.objectContaining({ amountArsCents: 45_500 }),
+      );
+    });
+
+    it("congela el cupón y su descuento en la fila de identidad", async () => {
+      couponDiscount = 9900;
+
+      await startCheckout({ ...params, couponCode: "BETA99" });
+
+      expect(rpc).toHaveBeenCalledWith(
+        "attach_subscription_checkout",
+        expect.objectContaining({
+          p_coupon_code: "BETA99",
+          p_discount_bps: 9900,
+          p_charged_amount_cents: 45_500,
+        }),
+      );
+    });
+
+    it("normaliza el código antes de canjearlo", async () => {
+      couponDiscount = 5000;
+
+      await startCheckout({ ...params, couponCode: "  beta99  " });
+
+      expect(rpc).toHaveBeenCalledWith(
+        "redeem_coupon",
+        expect.objectContaining({ p_code: "BETA99" }),
+      );
+    });
+
+    /**
+     * Un código que no sirve CORTA. Seguir al precio de lista le cobraría el
+     * total a alguien que escribió un cupón esperando pagar menos, y una
+     * sorpresa sobre plata es un reclamo al banco.
+     *
+     * Y corta ANTES de la pasarela: si abriera el preapproval y después
+     * fallara, quedaría una suscripción cobrando el precio entero que el dueño
+     * nunca aceptó.
+     */
+    it("corta sin abrir nada cuando el cupón no sirve", async () => {
+      couponDiscount = null;
+
+      const result = await startCheckout({ ...params, couponCode: "TRUCHO" });
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.code).toBe("coupon_invalid");
+      expect(createPreapproval).not.toHaveBeenCalled();
+    });
+
+    it("no canjea nada cuando no se escribió ningún cupón", async () => {
+      await startCheckout({ ...params, couponCode: "   " });
+
+      expect(rpc).not.toHaveBeenCalledWith(
+        "redeem_coupon",
+        expect.anything(),
+      );
+    });
+
+    /**
+     * Si la base no contesta, NO se sigue al precio de lista por las mismas
+     * razones que un cupón inválido, y se dice que fue un problema nuestro y no
+     * del código que escribió.
+     */
+    it("corta cuando no se pudo validar el cupón", async () => {
+      rpc.mockImplementation((fn: string) =>
+        fn === "redeem_coupon"
+          ? Promise.reject(new Error("sin red"))
+          : Promise.resolve({ data: true, error: null }),
+      );
+
+      const result = await startCheckout({ ...params, couponCode: "BETA99" });
+
+      expect(!result.ok && result.error.code).toBe("coupon_check_failed");
+      expect(createPreapproval).not.toHaveBeenCalled();
+    });
   });
 });

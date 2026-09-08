@@ -34,6 +34,35 @@ const PLAN_LIMITS: Record<PlanTier, PlanLimits> = {
 };
 
 /**
+ * El orden de los planes, de menos a más.
+ *
+ * Espeja la declaración del enum `public.plan_tier`, donde Postgres compara por
+ * orden de declaración. Están escritos acá y no derivados de `PLAN_LIMITS`
+ * porque el orden es una decisión de producto, no una consecuencia de los
+ * números: si mañana un plan tuviera más profesionales pero menos WhatsApp,
+ * derivarlo de los límites daría un orden distinto según qué límite se mire.
+ */
+const PLAN_RANK: Record<PlanTier, number> = {
+  basico: 0,
+  pro: 1,
+  premium: 2,
+};
+
+/**
+ * El mejor de dos planes.
+ *
+ * Existe para que un regalo nunca empeore lo comprado: ver `effectivePlan`.
+ * Ante un plan que no está en el catálogo prefiere el otro, con el mismo
+ * criterio de `limitsFor` — pero sin romper, porque acá siempre hay una
+ * respuesta segura disponible y romper dejaría al negocio sin ningún plan.
+ */
+export function betterPlan(a: PlanTier, b: PlanTier): PlanTier {
+  const rankA = Object.hasOwn(PLAN_RANK, a) ? PLAN_RANK[a] : -1;
+  const rankB = Object.hasOwn(PLAN_RANK, b) ? PLAN_RANK[b] : -1;
+  return rankB > rankA ? b : a;
+}
+
+/**
  * Límites del plan, o error si el plan no está en el catálogo.
  *
  * `PlanTier` es una unión de TypeScript y el valor real sale de una columna de
@@ -104,4 +133,50 @@ export function hasRoomForStaff(plan: PlanTier, activeStaff: number): boolean {
  */
 export function isOverStaffLimit(plan: PlanTier, activeStaff: number): boolean {
   return activeStaff > limitsFor(plan).staff;
+}
+
+/**
+ * Cuán consumido está el techo de turnos del período.
+ *
+ * - `under`: el negocio va tranquilo, no hay nada que decirle.
+ * - `near`: consumió el 80% o más. Todavía le queda, pero conviene que lo sepa.
+ * - `over`: llegó al techo o lo pasó.
+ */
+export type BookingCeilingState = "under" | "near" | "over";
+
+/**
+ * A partir de qué fracción del techo se le avisa al dueño.
+ *
+ * 80% es el mismo umbral que el cupo de WhatsApp. Avisar antes convierte el
+ * aviso en ruido y el ruido se ignora; avisar después no le deja margen para
+ * hacer nada con la información.
+ */
+const CEILING_WARNING_RATIO = 0.8;
+
+/**
+ * En qué punto del techo de turnos está el período.
+ *
+ * `bookings` se cuenta por CARGA (`created_at`) y NO por fecha del turno. El
+ * techo existe para ver abuso: contando por `starts_at`, alguien que carga
+ * cincuenta mil turnos con fecha del año que viene no topearía ningún período
+ * nunca, que es justo el caso que hay que ver. Contar por carga puede avisar
+ * de más; no contar por carga no avisa nunca, y los dos errores no cuestan lo
+ * mismo — sobre todo cuando este aviso NO bloquea a nadie.
+ *
+ * Por el mismo motivo un turno cancelado cuenta: ya ocupó su fila. Cancelarlo
+ * después no devuelve lo que se gastó.
+ *
+ * Llegar justo al techo devuelve `over` y no `near`: consumir el cupo entero
+ * es el evento que hay que contar, y decirle "casi" a alguien que ya no tiene
+ * margen es decirle que le queda algo.
+ */
+export function bookingCeilingState(
+  plan: PlanTier,
+  bookings: number,
+): BookingCeilingState {
+  const ceiling = limitsFor(plan).bookingsPerMonth;
+
+  if (bookings >= ceiling) return "over";
+  if (bookings >= ceiling * CEILING_WARNING_RATIO) return "near";
+  return "under";
 }

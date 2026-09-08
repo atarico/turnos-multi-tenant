@@ -308,3 +308,74 @@ export async function fetchSubscriptionEvent(
 
   return ok({ providerSubscriptionId, providerStatus: status });
 }
+
+/**
+ * Lo que Mercado Pago llama a una suscripción dada de baja.
+ *
+ * CON DOS ELES, y no es un detalle de estilo: nuestro enum
+ * `subscription_status` usa `canceled`, y mandarle el nuestro es un 400 que
+ * vuelve como `mp_rejected` y deja la suscripción cobrando. La misma trampa
+ * está anotada en la tabla de `webhook-event.ts`, que la resuelve en el
+ * sentido contrario.
+ */
+const PROVIDER_CANCELLED = "cancelled";
+
+/**
+ * Da de baja una suscripción en Mercado Pago. Después de esto no se cobra más.
+ *
+ * FALLA CERRADO, y acá eso tiene un significado concreto: no alcanza con que
+ * la respuesta sea 2xx. Mercado Pago puede contestar 200 y dejar el
+ * preapproval como estaba, y dar eso por bueno escribe "dado de baja" de
+ * nuestro lado mientras la tarjeta se sigue debitando todos los meses. El
+ * dueño se entera treinta días después, y con razón. Por eso se lee el cuerpo
+ * y se exige el estado, en vez de confiar en el código HTTP.
+ *
+ * Quien llama tiene que invocar esto ANTES de escribir nuestra fila. El orden
+ * está explicado entero en `cancel_subscription()`, del lado SQL, y se resume
+ * en que el único desenlace que no se arregla solo es el de cobrar a alguien
+ * que pidió irse.
+ */
+export async function cancelPreapproval(
+  providerSubscriptionId: string,
+): Promise<Result<void>> {
+  // `encodeURIComponent` por lo mismo que en `fetchSubscriptionEvent`: el id
+  // se guardó desde un webhook, o sea que entró de afuera. Sin escapar, un id
+  // con `../` arma la ruta que quiera quien lo puso, contra la API de Mercado
+  // Pago y con NUESTRO token en el header.
+  const url = `${PREAPPROVAL_ENDPOINT}/${encodeURIComponent(providerSubscriptionId)}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serverEnv().MERCADOPAGO_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify({ status: PROVIDER_CANCELLED }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: "no-store",
+    });
+  } catch {
+    return unreachable();
+  }
+
+  if (!response.ok) {
+    return response.status >= 500 ? unreachable() : rejected();
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return badResponse();
+  }
+
+  const { status } = (body ?? {}) as { status?: unknown };
+
+  // Se exige el estado y no se asume por el 200. Ver la nota de arriba: este
+  // `if` es la diferencia entre una baja y una mentira.
+  if (status !== PROVIDER_CANCELLED) return badResponse();
+
+  return ok(undefined);
+}

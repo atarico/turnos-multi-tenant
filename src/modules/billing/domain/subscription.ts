@@ -6,12 +6,20 @@ import type { PlanTier } from "@/modules/tenants/domain/types";
  * `past_due` es su propio estado y no un `active` con una bandera: el cobro
  * falló pero el servicio sigue andando durante la gracia. Colapsarlo contra
  * `active` haría imposible saber a quién avisarle.
+ *
+ * `incomplete` es la fila que existe para cobrar y todavía no cobró: la abre
+ * el re-alta cuando un negocio dado de baja vuelve a elegir un plan. No
+ * habilita nada —eso lo hace el webhook cuando el pago entra— y es el único
+ * estado que NO se le puede dar a un negocio que nunca pagó, porque sería
+ * regalarle una segunda prueba gratis por la puerta de atrás. Ver
+ * `20260907120001_subscription_incomplete_status.sql`.
  */
 export type SubscriptionStatus =
   | "trialing"
   | "active"
   | "past_due"
-  | "canceled";
+  | "canceled"
+  | "incomplete";
 
 /** Una suscripción. Espeja la tabla `public.subscriptions`. */
 export interface Subscription {
@@ -45,6 +53,20 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 type TrialView = Pick<Subscription, "status" | "trialEndsAt">;
 
 /**
+ * Lo mínimo para responder si el negocio puede recibir turnos.
+ *
+ * Pide `currentPeriodEnd` además de la prueba porque una suscripción dada de
+ * baja sigue habilitando hasta que se le termine lo pagado, y esa fecha es la
+ * única que lo sabe. Es un tipo aparte de `TrialView` y no un campo más
+ * encima: `isInTrial` y `trialDaysLeft` no tienen nada que hacer con el
+ * período, y pedirles un dato que no usan invita a que alguien lo mire.
+ */
+type AccessView = Pick<
+  Subscription,
+  "status" | "trialEndsAt" | "currentPeriodEnd"
+>;
+
+/**
  * ¿Está corriendo la prueba gratis?
  *
  * Pide las dos cosas: que el estado sea `trialing` Y que la fecha no haya
@@ -69,4 +91,87 @@ export function trialDaysLeft(subscription: TrialView, now: Date): number {
 
   const remaining = subscription.trialEndsAt!.getTime() - now.getTime();
   return Math.ceil(remaining / MS_PER_DAY);
+}
+
+/**
+ * ¿El negocio puede recibir turnos NUEVOS?
+ *
+ * Es la única pregunta que decide si se le muestra el formulario de reserva,
+ * en el panel y en la página pública. No decide nada más: la agenda que ya
+ * tiene se sigue viendo, cerrando y reprogramando. Perder turnos ya tomados
+ * —o no poder avisarle a un cliente que no lo pueden atender— sería un daño
+ * al cliente del negocio por una deuda del negocio.
+ *
+ * `null` es NO, y conviene decir por qué no es una decisión conservadora al
+ * voleo: `create_business` abre la suscripción en la misma transacción que el
+ * negocio, y `20260817120002` le dio una a cada negocio que ya existía. Un
+ * negocio sin suscripción viva no es un negocio nuevo, es un estado roto.
+ *
+ * ESTA FUNCIÓN NO ES EL FRENO. El freno vive en `create_booking()`, del lado
+ * de la base — `create_booking` sigue grantada a `authenticated`, así que un
+ * dueño logueado le puede pegar a PostgREST directo y saltearse todo este
+ * archivo. Acá se decide qué MOSTRAR; allá se decide qué ENTRA. Las dos tienen
+ * que dar la misma respuesta o el dueño llena un formulario para que la base
+ * se lo rechace. Ver `public.tenant_takes_bookings()`, reescrita por
+ * `20260904120001_cancel_subscription.sql`.
+ */
+export function takesNewBookings(
+  subscription: AccessView | null,
+  now: Date,
+): boolean {
+  if (!subscription) return false;
+
+  // La prueba se mide por la FECHA, no por la etiqueta: nada mueve el estado
+  // de `trialing` cuando se cumple el plazo. Ver `isInTrial`.
+  if (subscription.status === "trialing") return isInTrial(subscription, now);
+
+  /**
+   * LA BAJA CORTA EL COBRO, NO EL SERVICIO.
+   *
+   * Quien pagó hasta fin de mes y se da de baja hoy sigue tomando turnos hasta
+   * esa fecha: cobrarle el mes y sacárselo el día que avisa que se va es
+   * quedarse con plata por un servicio que no se prestó. Y de paso vuelve
+   * tranquilo un botón que tiene que serlo — el que no puede salir sin perder
+   * lo pagado, no entra.
+   *
+   * Vencido el período se congela SOLO, sin proceso que lo apague: la fila se
+   * queda como está y esta comparación deja de dar true. Mismo mecanismo con
+   * el que vence la prueba.
+   */
+  if (subscription.status === "canceled") {
+    return subscription.currentPeriodEnd.getTime() > now.getTime();
+  }
+
+  /**
+   * EL RE-ALTA NO SE ROBA LO QUE YA SE PAGÓ.
+   *
+   * `incomplete` se juzga igual que `canceled`, y por el mismo motivo: hereda
+   * el período pago de la baja de la que salió, así que quien se dio de baja
+   * el 5 estando pago hasta el 30 y aprieta "Contratar" el 10 sigue teniendo
+   * esos 20 días — empezar un checkout no se los puede quitar.
+   *
+   * No es "el estado incomplete habilita": lo que habilita es el período. Si
+   * la baja ya había vencido, hereda una fecha pasada y esto da false, que es
+   * lo correcto — el re-alta abre la puerta al COBRO, no al servicio. Quien
+   * activa de verdad es el webhook cuando el pago entra, y ahí el estado pasa
+   * a `active` y el período rota.
+   *
+   * Sin esta rama las dos superficies se contradicen sobre el mismo negocio:
+   * `tenant_takes_bookings()` es un `exists` sobre TODAS las filas y la
+   * cancelada seguiría habilitando, mientras que acá se juzga sólo la más
+   * nueva. `/panel/nueva-reserva` le escondería el formulario a alguien a
+   * quien `create_booking()` se lo aceptaría.
+   */
+  if (subscription.status === "incomplete") {
+    return subscription.currentPeriodEnd.getTime() > now.getTime();
+  }
+
+  // `past_due` entra: el cobro falló pero Mercado Pago lo sigue reintentando y
+  // el servicio anda durante la gracia. Espeja `LIVE_STATUSES`.
+  //
+  // Y no mira el período a propósito, a diferencia de la baja: acá la
+  // suscripción está VIVA y quien decide si sigue cobrando es Mercado Pago. Un
+  // `current_period_end` pasado en un `active` significa que el cobro todavía
+  // no rotó el período, no que se haya terminado el servicio.
+  return subscription.status === "active" || subscription.status === "past_due";
 }

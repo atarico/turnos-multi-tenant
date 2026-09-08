@@ -56,6 +56,23 @@ function setup(props: Partial<React.ComponentProps<typeof PlanPicker>> = {}) {
   );
 }
 
+/**
+ * El item de la lista de features que contiene ese texto.
+ *
+ * Va por el `li` y no por `getByText` porque el texto de cada feature está
+ * partido en varios nodos (`{option.staff}` + " " + "profesionales"), y un
+ * matcher de texto plano no cruza esa frontera: buscaría un solo nodo y no
+ * encontraría nada. Además es lo que hace falta para preguntar por el CARTEL,
+ * que es hermano del texto, no parte de él.
+ */
+function featureItem(pattern: RegExp): HTMLElement {
+  const item = [...document.querySelectorAll("li")].find((li) =>
+    pattern.test(li.textContent ?? ""),
+  );
+  if (!item) throw new Error(`Ningún feature de plan matchea ${pattern}`);
+  return item;
+}
+
 describe("PlanPicker", () => {
   it("muestra los tres planes con su precio", () => {
     setup();
@@ -145,5 +162,82 @@ describe("PlanPicker", () => {
     });
 
     resolve(idleState);
+  });
+
+  /**
+   * El cupón se escribe UNA vez y viaja con el plan que se apriete.
+   *
+   * Cada plan tiene su propio <form>, así que un input suelto afuera no se
+   * enviaría con ninguno. Lo que se fija acá es que lo tipeado llegue al form
+   * de CADA tarjeta: si sólo llegara al primero, el dueño escribe el código,
+   * aprieta Premium y le cobran el precio entero sin que nadie le avise.
+   */
+  it("manda el cupón tipeado con cualquiera de los planes", async () => {
+    const user = userEvent.setup();
+    setup({ currentPlan: "basico" });
+
+    await user.type(screen.getByLabelText(/tenés un cupón/i), "beta99");
+
+    const ocultos = document.querySelectorAll<HTMLInputElement>(
+      'input[type="hidden"][name="coupon"]',
+    );
+    expect(ocultos).toHaveLength(3);
+    for (const input of ocultos) {
+      expect(input.value).toBe("beta99");
+    }
+  });
+
+  it("sin cupón, el campo viaja vacío y no rompe nada", () => {
+    setup({ currentPlan: "basico" });
+
+    const ocultos = document.querySelectorAll<HTMLInputElement>(
+      'input[type="hidden"][name="coupon"]',
+    );
+    expect(ocultos).toHaveLength(3);
+    expect([...ocultos].every((i) => i.value === "")).toBe(true);
+  });
+
+  /**
+   * WhatsApp NO existe todavía: no hay una sola línea en el proyecto que mande
+   * un mensaje (`rg -ni whatsapp src` sólo devuelve texto de venta). Es el
+   * último punto de la hoja de ruta.
+   *
+   * Mientras no exista, la tilde dorada al lado de "800 mensajes de WhatsApp"
+   * es una promesa que el producto no puede cumplir, y quien la lee está a un
+   * clic de poner la tarjeta. El mismo criterio que el aviso del cambio de
+   * moneda: una sorpresa sobre lo que se paga es un reclamo esperando a pasar.
+   */
+  it("no vende WhatsApp como incluido: lo marca como próximamente", () => {
+    setup();
+
+    expect(featureItem(/800 mensajes de WhatsApp/)).toHaveTextContent(
+      /próximamente/i,
+    );
+    expect(featureItem(/2000 mensajes de WhatsApp/)).toHaveTextContent(
+      /próximamente/i,
+    );
+  });
+
+  it("lo que SÍ funciona no queda marcado como próximamente", () => {
+    // Si el cartel se pegara a toda la lista, el picker pasaría de vender de
+    // más a vender de menos: el límite de profesionales se hace cumplir de
+    // verdad (`staff/application/actions.ts`) y el techo de turnos se muestra.
+    setup();
+
+    expect(featureItem(/5 profesionales/)).not.toHaveTextContent(
+      /próximamente/i,
+    );
+    expect(featureItem(/1500 turnos por mes/)).not.toHaveTextContent(
+      /próximamente/i,
+    );
+  });
+
+  it("en Básico WhatsApp es una exclusión, no una espera", () => {
+    // Básico no lo va a tener nunca, aunque WhatsApp se construya mañana.
+    // Decirle "próximamente" sería prometerle algo que su plan no incluye.
+    setup();
+
+    const item = featureItem(/Sin WhatsApp/);
+    expect(item).not.toHaveTextContent(/próximamente/i);
   });
 });

@@ -5,10 +5,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { PlanTier } from "@/modules/tenants/domain/types";
 
 import { planLabel } from "../domain/plan";
+import { applyDiscount } from "../domain/discount";
 import { priceUsdCentsFor, usdCentsToArsCents } from "../domain/price";
 import { quoteUsdToArs } from "./fx";
 import { createPreapproval } from "./mercadopago";
-import { getLiveSubscriptionIdForCharge } from "./queries";
+import { openSubscriptionForCharge } from "./queries";
 
 /** Quién cobra. Hoy hay una sola; el país decide cuál. Ver `countries.ts`. */
 const PROVIDER = "mercadopago";
@@ -59,6 +60,8 @@ export interface StartCheckoutParams {
   payerEmail: string;
   /** A dónde vuelve el pagador cuando termina en la pasarela. */
   backUrl: string;
+  /** Lo que el dueño tipeó en el campo de cupón. Vacío o ausente = sin cupón. */
+  couponCode?: string;
   now?: Date;
 }
 
@@ -68,9 +71,12 @@ export interface StartCheckoutParams {
  *
  * EL ORDEN ES PARTE DEL DISEÑO, no una casualidad de cómo quedó escrito:
  *
- *   1. Leer la suscripción viva. Sin ella no hay a qué atar el cobro, y su
- *      lectura devuelve `Result` justamente para poder distinguir "no tiene"
- *      de "la base no contestó".
+ *   1. Conseguir la suscripción a la que atarle el cobro. Es el único paso
+ *      que puede ESCRIBIR: si el negocio se había dado de baja, le abre la
+ *      fila `incomplete` del re-alta —sin segunda prueba gratis y sin
+ *      habilitar nada— y devuelve ésa. Sin fila no hay a qué atar el cobro, y
+ *      devuelve `Result` para poder distinguir "este negocio no tiene ninguna
+ *      suscripción" de "la base no contestó".
  *   2. Cotizar. Si no hay cotización NO se cobra: no hay último valor conocido
  *      ni precio de respaldo, porque cobrar un número inventado es peor que no
  *      cobrar. Esto se corta antes de tocar la pasarela.
@@ -92,7 +98,7 @@ export async function startCheckout(
 ): Promise<Result<CheckoutSession>> {
   const { tenantId, plan, payerEmail, backUrl, now = new Date() } = params;
 
-  const subscriptionId = await getLiveSubscriptionIdForCharge(tenantId);
+  const subscriptionId = await openSubscriptionForCharge(tenantId, plan);
   if (!subscriptionId.ok) return subscriptionId;
 
   const quote = await quoteUsdToArs(now);
@@ -116,6 +122,72 @@ export async function startCheckout(
         "No pudimos calcular el precio en pesos. Intentá de nuevo en un momento.",
       ),
     );
+  }
+
+  // ---- Cupón -----------------------------------------------------------
+  //
+  // Se canjea ANTES de abrir el preapproval, porque el monto que se manda a la
+  // pasarela ya tiene que venir rebajado: no hay forma de descontar después.
+  // La contra es que un fallo posterior quema el canje. Es la dirección
+  // conservadora a propósito — canjear de menos cuesta una venta, canjear de
+  // más cuesta plata todos los meses, para siempre.
+  let couponCode: string | null = null;
+  let discountBps: number | null = null;
+
+  const typed = params.couponCode?.trim().toUpperCase() ?? "";
+  if (typed !== "") {
+    let redeemed: { data: unknown; error: unknown };
+    try {
+      redeemed = await createAdminClient().rpc("redeem_coupon", {
+        p_code: typed,
+        p_now: now.toISOString(),
+      });
+    } catch {
+      return err(
+        appError(
+          "coupon_check_failed",
+          "No pudimos validar el cupón. Intentá de nuevo en un momento.",
+        ),
+      );
+    }
+
+    if (redeemed.error) {
+      return err(
+        appError(
+          "coupon_check_failed",
+          "No pudimos validar el cupón. Intentá de nuevo en un momento.",
+        ),
+      );
+    }
+
+    // Un código que no sirve CORTA el checkout en vez de seguir al precio de
+    // lista. El dueño lo escribió esperando pagar menos: cobrarle el total en
+    // silencio es una sorpresa sobre plata, y una sorpresa sobre plata es un
+    // reclamo al banco. Los cuatro motivos —no existe, apagado, vencido,
+    // agotado— dan el mismo mensaje: distinguirlos convierte el campo en un
+    // oráculo para adivinar códigos ajenos.
+    if (redeemed.data === null || redeemed.data === undefined) {
+      return err(
+        appError(
+          "coupon_invalid",
+          "Ese cupón no es válido. Revisá el código o probá sin cupón.",
+        ),
+      );
+    }
+
+    couponCode = typed;
+    discountBps = redeemed.data as number;
+
+    try {
+      amountArsCents = applyDiscount(amountArsCents, discountBps);
+    } catch {
+      return err(
+        appError(
+          "price_conversion_failed",
+          "No pudimos calcular el precio con el cupón. Intentá de nuevo.",
+        ),
+      );
+    }
   }
 
   if (amountArsCents > MAX_CHARGED_AMOUNT_CENTS) {
@@ -163,6 +235,11 @@ export async function startCheckout(
       p_fx_quoted_at: quote.value.quotedAt.toISOString(),
       p_provider: PROVIDER,
       p_provider_subscription_id: session.value.providerSubscriptionId,
+      // El cupón viaja a la fila de identidad, no se relee después: el cobro
+      // del mes que viene corresponde a lo pactado en ESTE preapproval, y
+      // apagar un cupón no puede subirle el precio a quien ya lo usó.
+      p_coupon_code: couponCode,
+      p_discount_bps: discountBps,
     });
   } catch {
     return notStamped();

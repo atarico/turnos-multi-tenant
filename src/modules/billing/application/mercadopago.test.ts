@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelPreapproval,
   createPreapproval,
   fetchSubscriptionEvent,
   type PreapprovalDraft,
@@ -432,5 +433,142 @@ describe("fetchSubscriptionEvent", () => {
     const event = await fetchSubscriptionEvent("preapproval", "x");
     expect(event.ok).toBe(false);
     expect(!event.ok && event.error.message).not.toContain("TEST-token");
+  });
+});
+
+/**
+ * Tests de `cancelPreapproval`.
+ *
+ * Es el llamado que CORTA el cobro, y por eso lo que más se cuida es que no
+ * mienta éxito. Un `ok` devuelto sin que Mercado Pago haya cancelado nada deja
+ * al dueño con una pantalla que dice "dado de baja" y una tarjeta que se sigue
+ * debitando todos los meses — el peor desenlace posible de esta función, y uno
+ * del que el dueño se entera treinta días después.
+ */
+describe("cancelPreapproval", () => {
+  it("le pide a Mercado Pago cancelar ESE preapproval", async () => {
+    await cancelPreapproval("2c93-el-id");
+
+    const [url, options] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe("https://api.mercadopago.com/preapproval/2c93-el-id");
+    expect(options.method).toBe("PUT");
+    expect(JSON.parse(String(options.body))).toEqual({ status: "cancelled" });
+  });
+
+  /**
+   * Con dos eles. Mercado Pago escribe `cancelled` y nuestro enum usa
+   * `canceled`: mandar el nuestro es un 400 que se lee como "rechazó la
+   * solicitud" y deja la suscripción cobrando. Es la misma trampa que ya está
+   * anotada en la tabla de `webhook-event.ts`.
+   */
+  it("manda el `cancelled` de Mercado Pago, no nuestro `canceled`", async () => {
+    await cancelPreapproval("2c93-el-id");
+
+    const options = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(String(options.body)).toContain("cancelled");
+  });
+
+  it("viaja autenticado y sin caché", async () => {
+    await cancelPreapproval("2c93-el-id");
+
+    const options = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((options.headers as Record<string, string>).Authorization).toBe(
+      "Bearer TEST-token-de-prueba",
+    );
+    expect(options.cache).toBe("no-store");
+  });
+
+  /**
+   * El id viene de nuestra base, pero se escapa igual: es texto que entró por
+   * un webhook de afuera. Sin escapar, un id con `../` arma la ruta que quiera
+   * quien lo puso, contra la API de Mercado Pago y con NUESTRO token adentro.
+   * Mismo cuidado que en `fetchSubscriptionEvent`.
+   */
+  it("escapa el id en la ruta", async () => {
+    await cancelPreapproval("../../algo/raro");
+
+    const [url] = fetchMock.mock.calls[0]! as [string];
+    expect(url).toBe(
+      "https://api.mercadopago.com/preapproval/..%2F..%2Falgo%2Fraro",
+    );
+  });
+
+  it("cancela bien cuando Mercado Pago acepta", async () => {
+    fetchMock.mockResolvedValue(
+      okResponse({ id: "2c93-el-id", status: "cancelled" }),
+    );
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(true);
+  });
+
+  /**
+   * EL CASO QUE JUSTIFICA LEER EL CUERPO. Mercado Pago puede contestar 200 y
+   * dejar el preapproval como estaba. Dar eso por bueno es escribir "dado de
+   * baja" de nuestro lado mientras la tarjeta se sigue debitando; el dueño se
+   * entera treinta días después, y con razón.
+   */
+  it("NO da por cancelado un 200 cuyo estado no es cancelled", async () => {
+    fetchMock.mockResolvedValue(
+      okResponse({ id: "2c93-el-id", status: "authorized" }),
+    );
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("mp_bad_response");
+  });
+
+  it("un 5xx es transitorio y se puede reintentar", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("mp_unreachable");
+  });
+
+  it("un 4xx es nuestra request mal armada, y reintentar no la arregla", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 } as Response);
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("mp_rejected");
+  });
+
+  it("si no hubo respuesta, es inalcanzable", async () => {
+    fetchMock.mockRejectedValue(new Error("se cortó la red"));
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("mp_unreachable");
+  });
+
+  it("un cuerpo que no es JSON no se da por cancelado", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("no es json");
+      },
+    } as unknown as Response);
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("mp_bad_response");
+  });
+
+  /** El mensaje sale de una constante, así que no puede arrastrar el token. */
+  it("ningún mensaje de error lleva el token adentro", async () => {
+    fetchMock.mockRejectedValue(new Error("falló con TEST-token-de-prueba"));
+
+    const result = await cancelPreapproval("2c93-el-id");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).not.toContain("TEST-token");
   });
 });

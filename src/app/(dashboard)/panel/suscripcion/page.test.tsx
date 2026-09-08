@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
 import type { Subscription } from "@/modules/billing/domain/subscription";
@@ -24,9 +24,11 @@ vi.mock("@/modules/tenants/application/queries", () => ({
 }));
 vi.mock("@/modules/billing/application/queries", () => ({
   getCurrentSubscription: vi.fn(async () => null),
+  countPeriodBookings: vi.fn(async () => null),
 }));
 vi.mock("@/modules/billing/application/actions", () => ({
   startCheckoutAction: vi.fn(),
+  cancelSubscriptionAction: vi.fn(),
 }));
 
 const tenant: Tenant = {
@@ -36,6 +38,10 @@ const tenant: Tenant = {
   country: "AR",
   timezone: "America/Argentina/Buenos_Aires",
   plan: "basico",
+  paid_plan: "basico",
+  plan_courtesy: null,
+  plan_courtesy_until: null,
+  plan_courtesy_reason: null,
   logo_url: null,
   brand_color: "#e3b23c",
   created_at: "2024-01-01T00:00:00.000Z",
@@ -61,11 +67,28 @@ const subscription = (over: Partial<Subscription> = {}): Subscription => ({
   ...over,
 });
 
-async function renderPage(params: Record<string, string> = {}) {
+/**
+ * `undefined` en `suscripcion` deja el mock como esté — hay tests que lo
+ * configuran a mano antes de llamar. `null` lo pisa explícitamente con "este
+ * negocio no tiene suscripción", que es un caso distinto y hay que poder
+ * pedirlo.
+ */
+async function renderPage(
+  params: Record<string, string> = {},
+  negocio: Tenant = tenant,
+  suscripcion?: Subscription | null,
+) {
   const { getCurrentTenant } = await import(
     "@/modules/tenants/application/queries"
   );
-  vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+  vi.mocked(getCurrentTenant).mockResolvedValue(negocio);
+
+  if (suscripcion !== undefined) {
+    const { getCurrentSubscription } = await import(
+      "@/modules/billing/application/queries"
+    );
+    vi.mocked(getCurrentSubscription).mockResolvedValue(suscripcion);
+  }
 
   const { default: Page } = await import("./page");
   render(await Page({ searchParams: Promise.resolve(params) }));
@@ -74,7 +97,7 @@ async function renderPage(params: Record<string, string> = {}) {
 // Timeout ampliado en todos: cada test renderiza el Server Component entero y
 // bajo contención de CPU en la suite completa pasa de los 5000ms por defecto.
 describe("SuscripcionPage", () => {
-  it("manda a la bienvenida cuando la cuenta todavía no tiene negocio", { timeout: 15000 }, async () => {
+  it("manda al panel cuando la cuenta todavía no tiene negocio, para que él decida el destino", { timeout: 15000 }, async () => {
     const { getCurrentTenant } = await import(
       "@/modules/tenants/application/queries"
     );
@@ -83,7 +106,7 @@ describe("SuscripcionPage", () => {
 
     await expect(
       Page({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("NEXT_REDIRECT:/panel/bienvenida");
+    ).rejects.toThrow("NEXT_REDIRECT:/panel");
   });
 
   it("muestra los tres planes", { timeout: 15000 }, async () => {
@@ -171,5 +194,442 @@ describe("SuscripcionPage", () => {
     expect(
       screen.getAllByRole("button", { name: /contratar/i }),
     ).toHaveLength(3);
+  });
+
+  /**
+   * Tests de la cortesía vista por el DUEÑO.
+   *
+   * Desde el panel de plataforma un regalo se ve completo —plan, motivo, quién
+   * lo dio—. Desde acá lo único que importa son dos preguntas que el dueño
+   * necesita poder contestar: por qué tengo este plan si no lo pago, y qué pasa
+   * cuando se termine. Un plan mejor sin explicación se lee como algo comprado,
+   * y el día que caduca el negocio cree que le sacaron algo.
+   */
+  /** El cartel de cortesía, por su texto ancla. Tira si no está. */
+  function avisoDeCortesia(): HTMLElement {
+    return screen.getByText(/cortesía/i).closest("p") as HTMLElement;
+  }
+
+  describe("con una cortesía", () => {
+    const conCortesia: Tenant = {
+      ...tenant,
+      plan: "premium",
+      paid_plan: "basico",
+      plan_courtesy: "premium",
+      plan_courtesy_reason: "beta tester",
+    };
+
+    it(
+      "avisa que el plan es de cortesía y a cuál vuelve",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, conCortesia);
+
+        // El cartel mezcla texto y <b>, así que el texto vive partido en varios
+        // nodos y un getByText por frase no lo encuentra aunque esté en pantalla.
+        // Se afirma sobre el textContent del cartel entero.
+        expect(avisoDeCortesia().textContent).toMatch(/cortesía/i);
+        expect(avisoDeCortesia().textContent).toMatch(/vuelve a Básico/i);
+      },
+    );
+
+    it(
+      "sin vencimiento, lo dice en vez de dejarlo en blanco",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, { ...conCortesia, plan_courtesy_until: null });
+
+        expect(avisoDeCortesia().textContent).toMatch(/no tiene fecha de fin/i);
+      },
+    );
+
+    /**
+     * La fecha se pinta en UTC, y la zona del proceso se fija a mano para que
+     * eso se PRUEBE en vez de salir bien de casualidad.
+     *
+     * Medianoche UTC del 1 de diciembre son las 21hs del 30 de noviembre en
+     * Buenos Aires. Sin el TZDate, el operador elige un día y el dueño lee el
+     * anterior. En una máquina en UTC este test pasaría igual con el bug
+     * puesto: por eso la zona no se deja al azar de dónde corra la suite.
+     */
+    describe("con el proceso en horario argentino", () => {
+      const tzOriginal = process.env.TZ;
+      beforeAll(() => {
+        process.env.TZ = "America/Argentina/Buenos_Aires";
+      });
+      afterAll(() => {
+        process.env.TZ = tzOriginal;
+      });
+
+      it(
+        "con vencimiento, dice el día que se pactó y no el anterior",
+        { timeout: 15000 },
+        async () => {
+          await renderPage({}, {
+            ...conCortesia,
+            plan_courtesy_until: "2026-12-01T00:00:00.000Z",
+          });
+
+          const texto = avisoDeCortesia().textContent ?? "";
+          expect(texto).toMatch(/hasta el 1 de diciembre/i);
+          expect(texto).not.toMatch(/30 de noviembre/i);
+        },
+      );
+    });
+
+    /**
+     * EL BUG QUE ESTE CAMBIO ARREGLA.
+     *
+     * El picker marcaba como "Tu plan" el plan EFECTIVO, y lo bloqueaba cuando
+     * había un cobro abierto. Un negocio que paga básico con una cortesía
+     * premium veía premium bloqueado como si lo estuviera pagando, básico sin
+     * marcar, y no podía cambiar de plan.
+     *
+     * El picker habla de la relación comercial: lo que marca es lo que se paga.
+     * La cortesía se explica arriba, en su propio cartel.
+     */
+    it(
+      "el selector marca el plan que se PAGA, no el regalado",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, conCortesia);
+
+        const marca = screen.getByText("Tu plan");
+        const tarjeta = marca.closest("div")?.parentElement;
+        expect(tarjeta).not.toBeNull();
+        expect(within(tarjeta as HTMLElement).getByRole("heading", { level: 3 }).textContent).toBe("Básico");
+      },
+    );
+
+    it(
+      "sin cortesía no aparece ningún cartel de regalo",
+      { timeout: 15000 },
+      async () => {
+        await renderPage({}, tenant);
+
+        expect(screen.queryByText(/cortesía/i)).toBeNull();
+      },
+    );
+  });
+
+  /**
+   * El próximo cobro se muestra en la zona horaria DEL NEGOCIO.
+   *
+   * Es una fecha sobre plata: el dueño la lee para saber cuándo le van a
+   * descontar. Pintada en la zona del servidor, un negocio mexicano ve el día
+   * que corresponde en Buenos Aires, y la diferencia se nota justo en el borde
+   * del mes, que es cuando importa.
+   *
+   * La zona del PROCESO se fija a UTC a propósito. Sin eso, en una máquina que
+   * ya corre en horario argentino el test pasaría con el bug puesto: estaría
+   * probando dónde corre la suite, no que se use `tenant.timezone`.
+   */
+  describe("con el proceso en UTC y el negocio en Buenos Aires", () => {
+    const tzOriginal = process.env.TZ;
+    beforeAll(() => {
+      process.env.TZ = "UTC";
+    });
+    afterAll(() => {
+      process.env.TZ = tzOriginal;
+    });
+
+    it(
+      "muestra el próximo cobro en la hora del negocio, no la del servidor",
+      { timeout: 15000 },
+      async () => {
+        const { getCurrentSubscription } = await import(
+          "@/modules/billing/application/queries"
+        );
+        // 02:00 UTC del 1 de septiembre son las 23:00 del 31 de agosto en
+        // Buenos Aires: las dos lecturas caen en meses distintos.
+        vi.mocked(getCurrentSubscription).mockResolvedValue(
+          subscription({
+            status: "active",
+            currentPeriodEnd: new Date("2026-09-01T02:00:00.000Z"),
+          }),
+        );
+
+        await renderPage();
+
+        expect(screen.getByText(/31 de agosto/i)).toBeInTheDocument();
+        expect(screen.queryByText(/1 de septiembre/i)).toBeNull();
+      },
+    );
+  });
+
+  /**
+   * El techo de turnos del período.
+   *
+   * Es un freno ANTI-ABUSO, no una palanca de venta: está tan alto que un
+   * negocio normal no lo toca. Por eso lo único que hace es AVISARLE AL DUEÑO
+   * —que es quien eligió el plan— y NO bloquea a nadie que quiera reservar.
+   *
+   * Se cuenta por carga y no por fecha del turno; el porqué vive en
+   * `bookingCeilingState` y en la migración.
+   */
+  describe("techo de turnos", () => {
+    async function conTurnos(
+      cargados: number | null,
+      negocio: Tenant = tenant,
+    ) {
+      const { getCurrentSubscription, countPeriodBookings } = await import(
+        "@/modules/billing/application/queries"
+      );
+      vi.mocked(getCurrentSubscription).mockResolvedValue(subscription());
+      vi.mocked(countPeriodBookings).mockResolvedValue(cargados);
+      await renderPage({}, negocio);
+    }
+
+    /**
+     * El aviso completo, como párrafo.
+     *
+     * No sirve `getByText`: la cantidad va en un `<b>`, así que "Cargaste",
+     * "120" y "de 300 turnos" son tres nodos distintos y un matcher de texto
+     * plano no cruza esa frontera. Lo que se afirma es la FRASE, no el nodo.
+     */
+    function ceilingNotice(): HTMLElement | null {
+      return (
+        [...document.querySelectorAll("p")].find((el) =>
+          /turnos de tu plan/i.test(el.textContent ?? ""),
+        ) ?? null
+      );
+    }
+
+    it("dice cuántos turnos lleva cargados y cuántos permite el plan", { timeout: 15000 }, async () => {
+      await conTurnos(120);
+
+      // Básico son 300.
+      expect(ceilingNotice()).toHaveTextContent(/Cargaste 120 de 300 turnos/);
+    });
+
+    it("avisa cuando queda poco margen", { timeout: 15000 }, async () => {
+      await conTurnos(250);
+
+      expect(ceilingNotice()).toHaveTextContent(/te queda poco margen/i);
+    });
+
+    it("al pasarse aclara que los clientes SIGUEN pudiendo reservar", { timeout: 15000 }, async () => {
+      // Lo más importante de toda esta tajada. El dueño que ve "te pasaste"
+      // asume que su agenda se cerró y sale a apagar un incendio que no
+      // existe: el techo no bloquea ninguna reserva.
+      await conTurnos(310);
+
+      expect(ceilingNotice()).toHaveTextContent(/siguen pudiendo reservar/i);
+    });
+
+    it("cuando no se pudo contar NO muestra ningún número", { timeout: 15000 }, async () => {
+      // `null` es "no sabemos", no cero. Pintar "0 de 300" acá le diría al
+      // dueño que va tranquilo justo cuando no podemos afirmarlo.
+      await conTurnos(null);
+
+      expect(ceilingNotice()).toBeNull();
+    });
+
+    it("el techo es el del plan EFECTIVO, cortesía incluida", { timeout: 15000 }, async () => {
+      // Un negocio con premium de regalo tiene el techo de premium. Usar el
+      // plan pagado le avisaría a los 300 teniendo 5000 disponibles.
+      await conTurnos(400, {
+        ...tenant,
+        plan: "premium",
+        paid_plan: "basico",
+        plan_courtesy: "premium",
+      });
+
+      expect(ceilingNotice()).toHaveTextContent(/Cargaste 400 de 5000 turnos/);
+    });
+  });
+});
+
+/**
+ * La baja de suscripción en la pantalla.
+ *
+ * Dos cosas distintas viven acá: OFRECERLA cuando hay un cobro que cortar, y
+ * CONTAR el estado cuando ya se dio de baja. La segunda es la que evita el peor
+ * momento del producto — el dueño que canceló, entra al panel una semana
+ * después y no encuentra un solo rastro de lo que hizo.
+ */
+describe("baja de suscripción", () => {
+  it("la ofrece cuando hay un cobro abierto", async () => {
+    await renderPage({}, tenant, subscription({ status: "active" }));
+
+    expect(
+      screen.getByRole("button", { name: /dar de baja/i }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * `past_due` también: el cobro falló pero Mercado Pago lo sigue
+   * reintentando, así que hay un débito abierto que el dueño puede querer
+   * cortar. Esconder el botón justo ahí lo dejaría sin salida mientras le
+   * siguen intentando cobrar.
+   */
+  it("la ofrece con el cobro atrasado, que es cuando más se busca", async () => {
+    await renderPage({}, tenant, subscription({ status: "past_due" }));
+
+    expect(
+      screen.getByRole("button", { name: /dar de baja/i }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * Durante la prueba NO se ofrece, y no es un olvido: no hay ningún cobro
+   * abierto que cancelar —nada convierte la prueba sola, el checkout es
+   * manual— así que un botón que promete "no se te va a cobrar más" estaría
+   * contestando una pregunta que nadie hizo.
+   */
+  it("no la ofrece durante la prueba, donde no hay nada que cobrar", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({ status: "trialing", trialEndsAt: new Date(Date.now() + 5 * DAY) }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("no la ofrece sin suscripción", async () => {
+    await renderPage({}, tenant, null);
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * EL CASO QUE EVITA EL PEOR MOMENTO DEL PRODUCTO. Ya dada de baja y con el
+   * período corriendo, la pantalla tiene que decir las dos cosas: que está
+   * dada de baja, y hasta cuándo sigue andando. Sin la segunda, el dueño cree
+   * que perdió el mes que pagó.
+   */
+  it("dada de baja, dice hasta cuándo sigue tomando turnos", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "canceled",
+        currentPeriodEnd: new Date("2026-09-30T12:00:00Z"),
+      }),
+    );
+
+    expect(screen.getByText(/diste de baja/i)).toBeInTheDocument();
+    expect(screen.getByText(/30 de septiembre/)).toBeInTheDocument();
+  });
+
+  it("dada de baja no vuelve a ofrecer la baja", async () => {
+    await renderPage({}, tenant, subscription({ status: "canceled" }));
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * Y vencido el período cambia lo que dice, porque cambió lo que pasa: ya no
+   * entran turnos nuevos. Repetir el cartel de "seguís hasta el 30" una semana
+   * después del 30 sería mentirle mientras la base le rechaza las reservas.
+   */
+  it("con el período ya vencido dice que no entran turnos nuevos", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "canceled",
+        currentPeriodStart: new Date(Date.now() - 60 * DAY),
+        currentPeriodEnd: new Date(Date.now() - DAY),
+      }),
+    );
+
+    expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
+  });
+
+  /**
+   * EL HUECO QUE ABRE EL RE-ALTA, y que no existe hasta que existe el re-alta.
+   *
+   * Apenas el dueño aprieta "Contratar", el checkout le abre una fila
+   * `incomplete` — y `getCurrentSubscription` trae LA MÁS NUEVA, así que a
+   * partir de ese instante la pantalla deja de leer la fila `canceled`. Si
+   * abandona el pago y vuelve una semana después, sin este cartel no encuentra
+   * un solo rastro: no dice que se dio de baja (esa fila ya no es la que se
+   * lee), no dice que está pagando (no entró nada), y no explica por qué no le
+   * entran turnos. Se queda mirando los planes sin saber qué le pasó.
+   */
+  it("con el alta sin confirmar dice que el cobro todavía no entró", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date(Date.now() - 2 * DAY),
+        currentPeriodEnd: new Date(Date.now() - DAY),
+      }),
+    );
+
+    expect(screen.getByText(/no estás tomando turnos nuevos/i)).toBeInTheDocument();
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+  });
+
+  /**
+   * EL CASO QUE EL REVIEW ENCONTRÓ. Alta sin confirmar PERO con días todavía
+   * pagados: la fila `incomplete` hereda el período de la baja, y decirle "no
+   * estás tomando turnos" a quien tiene 20 días pagados le miente y encima lo
+   * apura a pagar algo que ya tiene.
+   */
+  it("con el alta sin confirmar y días pagados, dice hasta cuándo sigue", async () => {
+    await renderPage(
+      {},
+      tenant,
+      subscription({
+        status: "incomplete",
+        currentPeriodStart: new Date("2026-09-01T12:00:00Z"),
+        currentPeriodEnd: new Date("2026-09-30T12:00:00Z"),
+      }),
+    );
+
+    expect(screen.getByText(/todavía no nos entró el cobro/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no estás tomando turnos nuevos/i),
+    ).not.toBeInTheDocument();
+
+    /**
+     * LA FECHA, no la prosa que la rodea.
+     *
+     * Afirmar sólo «seguís tomando turnos hasta el» deja pasar el único fallo
+     * que importa de esta rama: `servesUntil` vacío. El cartel diría "hasta el
+     * , que es lo que ya habías pagado" y el test seguiría verde, porque el
+     * regex termina justo antes de la interpolación. Toda la carga informativa
+     * de la rama ES esa fecha.
+     */
+    expect(
+      screen.getByText(/seguís tomando turnos hasta el/i),
+    ).toHaveTextContent("30 de septiembre");
+  });
+
+  /**
+   * Y NO le ofrece la baja. No hay nada que dar de baja —el cobro nunca
+   * entró—, y un botón que promete "no se te va a cobrar más" sobre algo que
+   * no cobra contesta una pregunta que nadie hizo, con una acción que
+   * `cancel_subscription()` ni siquiera aplica sobre esta fila.
+   */
+  it("con el alta sin confirmar no ofrece la baja", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.queryByRole("button", { name: /dar de baja/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * Y el botón de contratar SIGUE disponible. Es el reintento: el dueño que
+   * abandonó el checkout tiene que poder volver a apretar, y la fila
+   * `incomplete` que ya tiene se reusa en vez de abrirle un segundo cobro.
+   */
+  it("con el alta sin confirmar todavía deja contratar", async () => {
+    await renderPage({}, tenant, subscription({ status: "incomplete" }));
+
+    expect(
+      screen.getByRole("button", { name: /contratar pro/i }),
+    ).toBeEnabled();
   });
 });

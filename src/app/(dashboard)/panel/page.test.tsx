@@ -28,6 +28,12 @@ vi.mock("@/modules/booking/application/queries", () => ({
 vi.mock("@/modules/billing/application/queries", () => ({
   getCurrentSubscription: vi.fn(async () => null),
 }));
+// Adónde va una cuenta sin negocio ya no lo decide esta página: la decisión
+// tiene dos respuestas y vive en su propio módulo, con sus propios tests. Acá
+// sólo se prueba que la página OBEDEZCA lo que le contesten.
+vi.mock("@/modules/admin/application/landing", () => ({
+  landingWithoutTenant: vi.fn(async () => "/panel/bienvenida"),
+}));
 
 const tenant: Tenant = {
   id: "t1",
@@ -36,6 +42,10 @@ const tenant: Tenant = {
   country: "AR",
   timezone: "America/Argentina/Buenos_Aires",
   plan: "basico",
+  paid_plan: "basico",
+  plan_courtesy: null,
+  plan_courtesy_until: null,
+  plan_courtesy_reason: null,
   logo_url: null,
   brand_color: "#e3b23c",
   created_at: "2024-01-01T00:00:00.000Z",
@@ -115,6 +125,36 @@ describe("PanelPage", () => {
         PanelPage({ searchParams: Promise.resolve({}) }),
       ).rejects.toThrow("NEXT_REDIRECT:/panel/bienvenida");
       expect(redirect).toHaveBeenCalledWith("/panel/bienvenida");
+    },
+  );
+
+  /**
+   * Un operador de plataforma tampoco tiene negocio, y hasta acá caía en el
+   * mismo `if` que alguien recién registrado: terminaba en un formulario
+   * pidiéndole crear un negocio que no quiere.
+   *
+   * Lo que fija este test es que la página no interprete el destino, lo pida.
+   * Si mañana alguien vuelve a escribir "/panel/bienvenida" literal acá, este
+   * caso lo caza.
+   */
+  it(
+    "manda al panel de plataforma cuando quien no tiene negocio es un operador",
+    { timeout: 15000 },
+    async () => {
+      const { getCurrentTenant } = await import(
+        "@/modules/tenants/application/queries"
+      );
+      const { landingWithoutTenant } = await import(
+        "@/modules/admin/application/landing"
+      );
+      vi.mocked(getCurrentTenant).mockResolvedValue(null);
+      vi.mocked(landingWithoutTenant).mockResolvedValue("/admin");
+      const { default: PanelPage } = await import("./page");
+
+      await expect(
+        PanelPage({ searchParams: Promise.resolve({}) }),
+      ).rejects.toThrow("NEXT_REDIRECT:/admin");
+      expect(redirect).toHaveBeenCalledWith("/admin");
     },
   );
 
