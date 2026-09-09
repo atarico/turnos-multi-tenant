@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBookingConfirmation, type BookingEmailData } from "./booking-email";
+import {
+  buildBookingConfirmation,
+  buildBookingReminder,
+  type BookingEmailData,
+} from "./booking-email";
 
 /**
  * Tests del contenido del mail de confirmación.
@@ -107,5 +111,58 @@ describe("buildBookingConfirmation", () => {
     expect(mail.text).not.toContain("null");
     expect(mail.text).not.toContain("undefined");
     expect(mail.text).toContain("Corte y barba");
+  });
+});
+
+/**
+ * Tests del recordatorio.
+ *
+ * La confirmación es el REGISTRO —queda guardada y se busca—; esto es la
+ * PALANCA. Llega el día antes, se lee en dos segundos entre otros veinte
+ * mails, y su único trabajo es que la persona se acuerde y venga. Por eso lo
+ * que se cuida acá es distinto: que se distinga de la confirmación de un
+ * vistazo, y que la hora esté adelante de todo.
+ */
+describe("buildBookingReminder", () => {
+  it("se distingue de la confirmación desde el asunto", () => {
+    const recordatorio = buildBookingReminder(data);
+    const confirmacion = buildBookingConfirmation(data);
+
+    expect(recordatorio.subject).not.toBe(confirmacion.subject);
+    expect(recordatorio.subject.toLowerCase()).toContain("mañana");
+  });
+
+  it("lleva la hora en la zona del negocio, igual que la confirmación", () => {
+    const mail = buildBookingReminder(data);
+
+    expect(mail.text).toContain("10:30");
+    expect(mail.text).not.toContain("13:30");
+  });
+
+  it("dice qué es y con quién, sin hacer buscar", () => {
+    const mail = buildBookingReminder(data);
+
+    expect(mail.text).toContain("Corte y barba");
+    expect(mail.text).toContain("Ana");
+    expect(mail.text).toContain("Peluquería Nube");
+  });
+
+  /**
+   * Y ACÁ SÍ INVITA A AVISAR SI NO VA A IR, que es la diferencia de fondo con
+   * la confirmación. Un recordatorio que sólo dice "acordate" desperdicia la
+   * única oportunidad de convertir un no-show en un hueco que el negocio puede
+   * volver a vender. Sigue sin prometer un botón: le pide que escriba.
+   */
+  it("le pide que avise si no va a poder ir", () => {
+    const mail = buildBookingReminder(data);
+
+    expect(mail.text.toLowerCase()).toContain("avisale");
+  });
+
+  it("sin profesional asignado no deja un hueco", () => {
+    const mail = buildBookingReminder({ ...data, staffName: null });
+
+    expect(mail.text).not.toContain("null");
+    expect(mail.text).not.toContain("undefined");
   });
 });

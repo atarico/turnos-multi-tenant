@@ -59,6 +59,18 @@ const serverEnvSchema = z.object({
    * que ser de un dominio verificado ante el proveedor: con la key puesta y un
    * remitente cualquiera, el proveedor rechaza cada envío.
    */
+  /**
+   * El secreto con el que el cron se identifica ante su propio endpoint.
+   *
+   * Opcional por lo mismo que las de correo —una obligatoria voltearía la app
+   * entera— pero con una diferencia importante en cómo se comporta ausente:
+   * ahí el endpoint queda CERRADO, no abierto. Sin secreto no hay forma de
+   * distinguir al cron de cualquiera que descubra la URL, y del otro lado hay
+   * un proceso que le escribe a los clientes de todos los negocios.
+   *
+   * Vercel lo manda como `Authorization: Bearer <secreto>` en cada corrida.
+   */
+  CRON_SECRET: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   NOTIFICATIONS_FROM_EMAIL: z.email().optional(),
 });
