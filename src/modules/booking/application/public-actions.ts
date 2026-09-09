@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { headers } from "next/headers";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
+import { notifyBookingCreated } from "@/modules/notifications/application/notify-booking";
 import { appError, err, ok, type Result } from "@/core/result";
 import { serverEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -123,7 +124,7 @@ export async function getPublicSlotsAction(
 
   const slots = generateSlots({
     date: dayRange.date,
-    timezone: tenant.timezone,
+      timezone: tenant.timezone,
     serviceId,
     durationMin: service.durationMin,
     capacity: service.capacity,
@@ -220,6 +221,39 @@ export async function createPublicBookingAction(
 
   if (error) {
     return errorState(friendlyBookingError(error.message));
+  }
+
+  // EL AVISO VA DESPUÉS, Y NO PUEDE CAMBIAR NADA DE LO DE ARRIBA.
+  //
+  // Es el orden inverso al del checkout, por el mismo razonamiento: allá el
+  // efecto externo va ANTES de escribir porque escribir primero deja una fila
+  // mintiendo. Acá la reserva es lo único que importa y el mail es su
+  // accesorio, así que va después y no se lo espera para nada. Invertirlo
+  // —no confirmar hasta que el mail salga— le regalaría a un proveedor de
+  // correo el poder de rechazar reservas.
+  //
+  // `notifyBookingCreated` no tira nunca y devuelve un texto en vez de un
+  // `Result` justamente para que acá no haya nada que decidir. Se lo descarta
+  // a la vista con `void`, que es lo que el repo hace con lo que no se lee.
+  // El `try` NO es redundante con el "nunca tira" de `notifyBookingCreated`.
+  // Esa promesa la sostiene un test de otro módulo, y acá lo que está en juego
+  // si algún día se rompe es una reserva YA TOMADA que le vuelve al cliente
+  // como error — mandándolo a reservar de nuevo sobre su propio turno. Cuando
+  // el costo de confiar es ése, se chequea igual.
+  try {
+    await notifyBookingCreated({
+      tenantName: tenant.name,
+    timezone: tenant.timezone,
+      serviceId: service_id,
+      staffId: staff_id,
+      startsAt: new Date(starts_at),
+      customerName: customer_name,
+      customerEmail: customer_email ? customer_email : null,
+    });
+  } catch {
+    // Se traga a propósito y sin registrar acá: el turno está tomado, no hay
+    // nada que el cliente pueda hacer con esto, y `notifyBookingCreated` ya
+    // distingue sus propios desenlaces adentro.
   }
 
   return { status: "success", message: "Reserva confirmada." };

@@ -38,9 +38,22 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => createAdminClient(),
 }));
 
+/**
+ * El aviso por mail se mockea, no se deja correr: acá lo que se prueba es que
+ * la reserva LO LLAME y —sobre todo— que un fallo suyo no toque el resultado.
+ * Su contenido tiene sus propios tests en `modules/notifications`.
+ */
+type NotifyCall = (booking: Record<string, unknown>) => Promise<string>;
+const notifyBookingCreated = vi.fn<NotifyCall>(async () => "sent");
+vi.mock("@/modules/notifications/application/notify-booking", () => ({
+  notifyBookingCreated: (booking: Record<string, unknown>) =>
+    notifyBookingCreated(booking),
+}));
+
 const getTenantBySlug = vi.fn(async (): Promise<unknown> => ({
   id: "tenant-1",
   slug: "negocio",
+  name: "Peluquería Nube",
   timezone: "America/Argentina/Buenos_Aires",
 }));
 vi.mock("@/modules/tenants/application/queries", () => ({
@@ -86,11 +99,61 @@ beforeEach(() => {
   getTenantBySlug.mockResolvedValue({
     id: "tenant-1",
     slug: "negocio",
+    name: "Peluquería Nube",
     timezone: "America/Argentina/Buenos_Aires",
   });
+  notifyBookingCreated.mockResolvedValue("sent");
 });
 
 describe("createPublicBookingAction", () => {
+  /**
+   * EL LAZO QUE HASTA HOY NO SE CERRABA. Antes de esto el cliente reservaba,
+   * veía una pantalla y cerraba la pestaña sin ningún registro de nada. La
+   * reserva tiene que disparar la confirmación, con la zona horaria del
+   * negocio y el mail que dejó.
+   */
+  it("le manda la confirmación a quien reservó", async () => {
+    await createPublicBookingAction(
+      "negocio",
+      validInput({ customer_email: "ana@correo.com" }),
+    );
+
+    expect(notifyBookingCreated).toHaveBeenCalledOnce();
+    expect(notifyBookingCreated.mock.calls[0]![0]).toMatchObject({
+      tenantName: "Peluquería Nube",
+      timezone: "America/Argentina/Buenos_Aires",
+      customerName: "Ana",
+      customerEmail: "ana@correo.com",
+    });
+  });
+
+  /**
+   * EL CASO QUE PROTEGE LA RESERVA, y es la razón de que el aviso vaya
+   * después. Si el mail explota, el turno YA ESTÁ TOMADO en la base: devolver
+   * un error acá le diría al cliente que no reservó cuando sí reservó, y lo
+   * mandaría a reservar de nuevo sobre su propio turno.
+   */
+  it("un aviso que explota no rompe una reserva ya tomada", async () => {
+    notifyBookingCreated.mockRejectedValueOnce(new Error("el proveedor se cayó"));
+
+    const result = await createPublicBookingAction("negocio", validInput());
+
+    expect(result).toEqual({ status: "success", message: "Reserva confirmada." });
+  });
+
+  /**
+   * Y el mail vacío del formulario viaja como `null`, no como cadena vacía: es
+   * la misma normalización que ya hace la RPC, y sin ella el notificador
+   * creería que hay a dónde escribir.
+   */
+  it("sin mail cargado, el aviso recibe null", async () => {
+    await createPublicBookingAction("negocio", validInput({ customer_email: "" }));
+
+    expect(notifyBookingCreated.mock.calls[0]![0]).toMatchObject({
+      customerEmail: null,
+    });
+  });
+
   it("books via create_public_booking with the resolved slug and hashed origin", async () => {
     headerGet.mockImplementation((name) =>
       name === "x-forwarded-for" ? "203.0.113.9" : null,
