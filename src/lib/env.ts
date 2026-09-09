@@ -41,6 +41,26 @@ const serverEnvSchema = z.object({
    * cobro se aplica.
    */
   MERCADOPAGO_WEBHOOK_SECRET: z.string().min(1),
+  /**
+   * Credenciales del correo saliente. LAS DOS SON OPCIONALES, y eso es una
+   * decisión y no un descuido.
+   *
+   * `serverEnv()` valida todo junto y TIRA si falta algo, así que una variable
+   * obligatoria acá voltearía la aplicación entera —reservas incluidas— el día
+   * que el mail no esté configurado. Sería cambiar "el cliente no recibe un
+   * mail" por "nadie puede reservar", que es un negocio pésimo.
+   *
+   * Ausentes significa NOTIFICACIONES APAGADAS, y el módulo que las manda lo
+   * dice explícitamente en vez de fallar en silencio. Así esto se puede
+   * desplegar antes de tener la cuenta y el dominio verificado, y se prende
+   * cuando estén.
+   *
+   * `NOTIFICATIONS_FROM_EMAIL` va aparte de la key porque el remitente tiene
+   * que ser de un dominio verificado ante el proveedor: con la key puesta y un
+   * remitente cualquiera, el proveedor rechaza cada envío.
+   */
+  RESEND_API_KEY: z.string().min(1).optional(),
+  NOTIFICATIONS_FROM_EMAIL: z.email().optional(),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

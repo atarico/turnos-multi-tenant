@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
+import { notifyBookingCreated } from "@/modules/notifications/application/notify-booking";
 import { appError, err, ok, type Result } from "@/core/result";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
@@ -78,7 +79,7 @@ export async function getSlotsAction(
 
   const slots = generateSlots({
     date: dayRange.date,
-    timezone: tenant.timezone,
+      timezone: tenant.timezone,
     serviceId,
     durationMin: service.durationMin,
     capacity: service.capacity,
@@ -131,6 +132,29 @@ export async function createBookingAction(
 
   if (error) {
     return errorState(friendlyOwnerBookingError(error.message));
+  }
+
+  // El cliente recibe la misma confirmación reserve él o la cargue el negocio
+  // por teléfono: para quien la recibe es el mismo turno, y en este camino es
+  // MÁS necesaria — el cliente no vio ninguna pantalla, sólo escuchó una hora
+  // por teléfono. Ver la nota larga en `public-actions.ts` sobre por qué va
+  // después y por qué no se mira lo que devuelve.
+  // El `try` va por lo mismo que en `public-actions.ts`: no se le confía una
+  // reserva ya tomada a la promesa de que otro módulo no tira.
+  try {
+    await notifyBookingCreated({
+      tenantName: tenant.name,
+    timezone: tenant.timezone,
+      serviceId: service_id,
+      staffId: staff_id,
+      startsAt: new Date(starts_at),
+      customerName: customer_name,
+      customerEmail: customer_email ? customer_email : null,
+    });
+  } catch {
+    // Se traga a propósito y sin registrar acá: el turno está tomado, no hay
+    // nada que el cliente pueda hacer con esto, y `notifyBookingCreated` ya
+    // distingue sus propios desenlaces adentro.
   }
 
   // La agenda del panel cambió: que la próxima carga muestre el turno nuevo.
