@@ -143,8 +143,9 @@ export async function createBookingAction(
   // reserva ya tomada a la promesa de que otro módulo no tira.
   try {
     await notifyBookingCreated({
+      tenantId: tenant.id,
       tenantName: tenant.name,
-    timezone: tenant.timezone,
+      timezone: tenant.timezone,
       serviceId: service_id,
       staffId: staff_id,
       startsAt: new Date(starts_at),
