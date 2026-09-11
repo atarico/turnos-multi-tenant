@@ -242,8 +242,9 @@ export async function createPublicBookingAction(
   // el costo de confiar es ése, se chequea igual.
   try {
     await notifyBookingCreated({
+      tenantId: tenant.id,
       tenantName: tenant.name,
-    timezone: tenant.timezone,
+      timezone: tenant.timezone,
       serviceId: service_id,
       staffId: staff_id,
       startsAt: new Date(starts_at),
