@@ -28,7 +28,36 @@ const data: BookingEmailData = {
   customerName: "Marcos",
 };
 
+/**
+ * La forma del documento, sin el whitespace que separa los tags.
+ *
+ * Las plantillas se escriben en varias líneas para poder leerlas, y eso deja
+ * saltos e indentación entre los tags del HTML emitido. Al renderizar no
+ * cambia nada —el HTML colapsa ese espacio— pero tampoco hay que dejarlo sin
+ * decir: lo que se fija acá es el DOCUMENTO, no la sangría del código fuente,
+ * así que reordenar la plantilla rompe el test y reindentarla no.
+ */
+function formaDe(html: string): string {
+  return html.replace(/>\s+</g, "><").trim();
+}
+
 describe("buildBookingConfirmation", () => {
+
+  it("arma el documento con esta forma exacta", () => {
+    const mail = buildBookingConfirmation(data);
+
+    expect(formaDe(mail.html)).toBe(
+      "<p>Hola Marcos, tu turno quedó confirmado.</p>" +
+      "<h2>Peluquería Nube</h2>" +
+      "<table>" +
+      "<tr><td><strong>Servicio:</strong></td><td>Corte y barba</td></tr>" +
+      "<tr><td><strong>Con:</strong></td><td>Ana</td></tr>" +
+      "<tr><td><strong>Cuándo:</strong></td><td>martes 15 de septiembre a las 10:30</td></tr>" +
+      "</table>" +
+      "<p>Si necesitás cambiarlo o cancelarlo, escribile al negocio.</p>",
+    );
+  });
+
   it("dice el negocio en el asunto, que es lo que se lee sin abrir", () => {
     const mail = buildBookingConfirmation(data);
 
@@ -166,6 +195,22 @@ describe("buildBookingConfirmation", () => {
  * vistazo, y que la hora esté adelante de todo.
  */
 describe("buildBookingReminder", () => {
+
+  it("arma el documento con esta forma exacta", () => {
+    const mail = buildBookingReminder(data);
+
+    expect(formaDe(mail.html)).toBe(
+      "<p>Hola Marcos, te recordamos tu turno de mañana.</p>" +
+      "<h2>martes 15 de septiembre a las 10:30</h2>" +
+      "<table>" +
+      "<tr><td><strong>Dónde:</strong></td><td>Peluquería Nube</td></tr>" +
+      "<tr><td><strong>Servicio:</strong></td><td>Corte y barba</td></tr>" +
+      "<tr><td><strong>Con:</strong></td><td>Ana</td></tr>" +
+      "</table>" +
+      "<p>Si no vas a poder venir, avisale al negocio así puede liberar el lugar.</p>",
+    );
+  });
+
   it("se distingue de la confirmación desde el asunto", () => {
     const recordatorio = buildBookingReminder(data);
     const confirmacion = buildBookingConfirmation(data);
@@ -247,6 +292,21 @@ describe("buildBookingReminder", () => {
  * quién, cuándo y quién reservó.
  */
 describe("buildNewBookingForTenant", () => {
+
+  it("arma el documento con esta forma exacta", () => {
+    const mail = buildNewBookingForTenant(data);
+
+    expect(formaDe(mail.html)).toBe(
+      "<h2>Te llegó una reserva nueva en Peluquería Nube</h2>" +
+      "<table>" +
+      "<tr><td><strong>Servicio:</strong></td><td>Corte y barba</td></tr>" +
+      "<tr><td><strong>Con:</strong></td><td>Ana</td></tr>" +
+      "<tr><td><strong>Cuándo:</strong></td><td>martes 15 de septiembre a las 10:30</td></tr>" +
+      "<tr><td><strong>Cliente:</strong></td><td>Marcos</td></tr>" +
+      "</table>",
+    );
+  });
+
   it("le habla al negocio, no al cliente", () => {
     const mail = buildNewBookingForTenant(data);
 
