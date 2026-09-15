@@ -39,7 +39,7 @@ declare
   v_color  text;
   v_logo   text;
 begin
-  insert into auth.users (email) values ('marca@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'marca@test.com') returning id into v_user;
   insert into public.tenants (slug, name, country)
     values ('grants-marca', 'Negocio Marca', 'AR') returning id into v_tenant;
   insert into public.memberships (user_id, tenant_id, role)
@@ -77,7 +77,7 @@ declare
   v_color    text;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('plan@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'plan@test.com') returning id into v_user;
   insert into public.tenants (slug, name, country)
     values ('grants-plan', 'Negocio Plan', 'AR') returning id into v_tenant;
   insert into public.memberships (user_id, tenant_id, role)
@@ -126,7 +126,7 @@ declare
   v_slug      text;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('slug@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'slug@test.com') returning id into v_user;
   insert into public.tenants (slug, name, country)
     values ('grants-slug', 'Negocio Slug', 'AR') returning id into v_tenant;
   insert into public.memberships (user_id, tenant_id, role)
@@ -187,7 +187,7 @@ declare
   v_tocadas   int;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('admin@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'admin@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country, brand_color)
     values ('grants-ajeno', 'Negocio Ajeno', 'AR', '#aaaaaa') returning id into v_tenant;

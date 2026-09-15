@@ -30,7 +30,7 @@ declare
   v_tenant uuid;
   v_row    public.tenants;
 begin
-  insert into auth.users (email) values ('cort-admin@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-admin@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country)
     values ('cort-uno', 'Negocio Uno', 'AR') returning id into v_tenant;
@@ -82,7 +82,7 @@ declare
   v_courtesy  public.plan_tier;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cort-dueno@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-dueno@test.com') returning id into v_user;
   insert into public.tenants (slug, name, country)
     values ('cort-dos', 'Negocio Dos', 'AR') returning id into v_tenant;
   insert into public.memberships (user_id, tenant_id, role)
@@ -134,7 +134,7 @@ declare
   v_color     text;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cort-patch@test.com') returning id into v_dueno;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-patch@test.com') returning id into v_dueno;
   insert into public.tenants (slug, name, country)
     values ('cort-tres', 'Negocio Tres', 'AR') returning id into v_tenant;
   insert into public.memberships (user_id, tenant_id, role)
@@ -177,7 +177,7 @@ declare
   v_blanco boolean := false;
   v_row    public.tenants;
 begin
-  insert into auth.users (email) values ('cort-motivo@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-motivo@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country)
     values ('cort-cuatro', 'Negocio Cuatro', 'AR') returning id into v_tenant;
@@ -230,7 +230,7 @@ declare
   v_courtesy  public.plan_tier;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cort-vencida@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-vencida@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country)
     values ('cort-cinco', 'Negocio Cinco', 'AR') returning id into v_tenant;
@@ -271,7 +271,7 @@ declare
   v_tenant uuid;
   v_row    public.tenants;
 begin
-  insert into auth.users (email) values ('cort-quitar@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-quitar@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country)
     values ('cort-seis', 'Negocio Seis', 'AR') returning id into v_tenant;
@@ -309,8 +309,8 @@ declare
   v_courtesy  public.plan_tier;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cort-adm2@test.com') returning id into v_admin;
-  insert into auth.users (email) values ('cort-usr2@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-adm2@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-usr2@test.com') returning id into v_user;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country)
     values ('cort-siete', 'Negocio Siete', 'AR') returning id into v_tenant;
@@ -358,7 +358,7 @@ declare
   v_result text;
   v_row    public.tenants;
 begin
-  insert into auth.users (email) values ('cort-webhook@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cort-webhook@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
   insert into public.tenants (slug, name, country, plan)
     values ('cort-ocho', 'Negocio Ocho', 'AR', 'basico') returning id into v_tenant;
