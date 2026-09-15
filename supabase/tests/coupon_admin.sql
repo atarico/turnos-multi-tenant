@@ -28,7 +28,7 @@ declare
   v_admin uuid;
   v_row   public.coupons;
 begin
-  insert into auth.users (email) values ('cadm1@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm1@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -68,8 +68,8 @@ declare
   v_apago  boolean := false;
   v_count  int;
 begin
-  insert into auth.users (email) values ('cadm2@test.com') returning id into v_admin;
-  insert into auth.users (email) values ('cusr2@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm2@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cusr2@test.com') returning id into v_user;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -118,7 +118,7 @@ declare
   v_admin uuid;
   v_count int;
 begin
-  insert into auth.users (email) values ('cadm3@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm3@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -146,7 +146,7 @@ declare
   v_admin    uuid;
   v_discount int;
 begin
-  insert into auth.users (email) values ('cadm4@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm4@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -180,7 +180,7 @@ declare
   v_admin     uuid;
   v_rechazado boolean := false;
 begin
-  insert into auth.users (email) values ('cadm5@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm5@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -211,7 +211,7 @@ declare
   v_rechazado boolean := false;
   v_count     int;
 begin
-  insert into auth.users (email) values ('cadm6@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cadm6@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id, note) values (v_admin, 'test');
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
