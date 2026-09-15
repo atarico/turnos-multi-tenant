@@ -112,6 +112,47 @@ describe("buildBookingConfirmation", () => {
     expect(mail.text).not.toContain("null");
     expect(mail.text).not.toContain("undefined");
     expect(mail.text).toContain("Corte y barba");
+
+    // La fila ausente entra al HTML como HTML vacío, no como un string pelado.
+    // Si la marca de `raw()` dejara de reconocerse, el objeto se interpolaría
+    // como "[object Object]" en la casilla de alguien, y un test que sólo
+    // mira que falte la etiqueta no se entera.
+    expect(mail.html).not.toContain("[object Object]");
+    expect(mail.html).not.toContain("Con:");
+  });
+
+  /**
+   * Todo lo que entra al HTML lo carga alguien: el nombre lo tipea cualquiera
+   * desde el formulario público, y el nombre del negocio —aunque lo carga el
+   * dueño en su panel— viaja igual a la casilla de un desconocido. Nada de
+   * eso se deja crudo. El texto plano, en cambio, no es HTML: ahí no hay nada
+   * que escapar.
+   */
+  it("escapa cliente y negocio en el HTML, no en el texto; las filas siguen siendo HTML de verdad", () => {
+    const mail = buildBookingConfirmation({
+      ...data,
+      tenantName: `Peluquería "Ñ" & Cía`,
+      serviceName: `Corte & Barba <premium>`,
+      staffName: `Ana & Cía`,
+      customerName: `<img src=x onerror=alert(1)>`,
+    });
+
+    expect(mail.html).not.toContain("<img src=x onerror=alert(1)>");
+    expect(mail.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(mail.html).not.toContain(`Peluquería "Ñ" & Cía<`);
+    expect(mail.html).toContain("Peluquería &quot;Ñ&quot; &amp; Cía");
+    expect(mail.html).toContain("Corte &amp; Barba &lt;premium&gt;");
+    expect(mail.html).toContain("Ana &amp; Cía");
+
+    // Nada de doble escape: el "&" de arriba se ve una sola vez codificado.
+    expect(mail.html).not.toContain("&amp;amp;");
+
+    // La fila armada como HTML sigue siendo HTML de verdad: la etiqueta no se
+    // escapa, sólo el valor que lleva adentro.
+    expect(mail.html).toContain("<tr><td><strong>Con:</strong></td><td>Ana &amp; Cía</td></tr>");
+
+    expect(mail.text).toContain(`<img src=x onerror=alert(1)>`);
+    expect(mail.text).toContain(`Peluquería "Ñ" & Cía`);
   });
 });
 
@@ -165,6 +206,35 @@ describe("buildBookingReminder", () => {
 
     expect(mail.text).not.toContain("null");
     expect(mail.text).not.toContain("undefined");
+
+    // La fila ausente entra al HTML como HTML vacío, no como un string pelado.
+    // Si la marca de `raw()` dejara de reconocerse, el objeto se interpolaría
+    // como "[object Object]" en la casilla de alguien, y un test que sólo
+    // mira que falte la etiqueta no se entera.
+    expect(mail.html).not.toContain("[object Object]");
+    expect(mail.html).not.toContain("Con:");
+  });
+
+  /** Mismo cuidado que en la confirmación: nada entra crudo al HTML. */
+  it("escapa cliente y negocio en el HTML, no en el texto; las filas siguen siendo HTML de verdad", () => {
+    const mail = buildBookingReminder({
+      ...data,
+      tenantName: `Peluquería "Ñ" & Cía`,
+      serviceName: `Corte & Barba <premium>`,
+      staffName: `Ana & Cía`,
+      customerName: `<img src=x onerror=alert(1)>`,
+    });
+
+    expect(mail.html).not.toContain("<img src=x onerror=alert(1)>");
+    expect(mail.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(mail.html).toContain("Peluquería &quot;Ñ&quot; &amp; Cía");
+    expect(mail.html).toContain("Corte &amp; Barba &lt;premium&gt;");
+    expect(mail.html).toContain("Ana &amp; Cía");
+    expect(mail.html).not.toContain("&amp;amp;");
+    expect(mail.html).toContain("<tr><td><strong>Con:</strong></td><td>Ana &amp; Cía</td></tr>");
+
+    expect(mail.text).toContain(`<img src=x onerror=alert(1)>`);
+    expect(mail.text).toContain(`Peluquería "Ñ" & Cía`);
   });
 });
 
@@ -204,6 +274,13 @@ describe("buildNewBookingForTenant", () => {
 
     expect(mail.text).not.toContain("null");
     expect(mail.text).not.toContain("undefined");
+
+    // La fila ausente entra al HTML como HTML vacío, no como un string pelado.
+    // Si la marca de `raw()` dejara de reconocerse, el objeto se interpolaría
+    // como "[object Object]" en la casilla de alguien, y un test que sólo
+    // mira que falte la etiqueta no se entera.
+    expect(mail.html).not.toContain("[object Object]");
+    expect(mail.html).not.toContain("Con:");
   });
 
   /**
@@ -215,6 +292,13 @@ describe("buildNewBookingForTenant", () => {
 
     expect(mail.text).not.toContain("Mail:");
     expect(mail.text).not.toContain("undefined");
+
+    // La fila ausente entra al HTML como HTML vacío, no como un string pelado.
+    // Si la marca de `raw()` dejara de reconocerse, el objeto se interpolaría
+    // como "[object Object]" en la casilla de alguien, y un test que sólo
+    // mira que falte la etiqueta no se entera.
+    expect(mail.html).not.toContain("[object Object]");
+    expect(mail.html).not.toContain("Mail:");
   });
 
   it("con mail del cliente lo incluye, para poder contactarlo", () => {
@@ -247,5 +331,49 @@ describe("buildNewBookingForTenant", () => {
     expect(mail.html).not.toContain("<img src=x onerror=alert(1)>");
     expect(mail.html).not.toContain("<script>1</script>");
     expect(mail.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  /**
+   * `tenantName`/`serviceName`/`staffName` los carga el dueño en su panel, no
+   * un desconocido — pero acá también quedan crudos en el HTML si no se
+   * escapan, así que se cuidan igual. El texto plano no es HTML: ahí no hay
+   * nada que escapar, y las filas condicionales siguen siendo HTML de verdad.
+   */
+  it("escapa negocio, servicio y profesional en el HTML, no en el texto; las filas siguen siendo HTML de verdad", () => {
+    const mail = buildNewBookingForTenant({
+      ...data,
+      tenantName: `Peluquería "Ñ" & Cía`,
+      serviceName: `Corte & Barba <premium>`,
+      staffName: `Ana & Cía`,
+      customerEmail: `marcos@correo.com`,
+    });
+
+    expect(mail.html).toContain("Peluquería &quot;Ñ&quot; &amp; Cía");
+    expect(mail.html).toContain("Corte &amp; Barba &lt;premium&gt;");
+    expect(mail.html).toContain("Ana &amp; Cía");
+    expect(mail.html).not.toContain("&amp;amp;");
+    expect(mail.html).toContain("<tr><td><strong>Con:</strong></td><td>Ana &amp; Cía</td></tr>");
+    expect(mail.html).toContain(
+      '<tr><td><strong>Mail:</strong></td><td>marcos@correo.com</td></tr>',
+    );
+
+    expect(mail.text).toContain(`Peluquería "Ñ" & Cía`);
+    expect(mail.text).toContain(`Corte & Barba <premium>`);
+    expect(mail.text).toContain(`Ana & Cía`);
+  });
+
+  /**
+   * El asunto NO es HTML: si se escapara ahí, quien lee el mail vería
+   * "&amp;" en lugar de "&". Sólo el HTML pasa por el tag; el asunto y el
+   * texto quedan tal cual siempre estuvieron.
+   */
+  it("no escapa el asunto: no es HTML", () => {
+    const mail = buildNewBookingForTenant({
+      ...data,
+      tenantName: `Peluquería "Ñ" & Cía`,
+    });
+
+    expect(mail.subject).toContain(`Peluquería "Ñ" & Cía`);
+    expect(mail.subject).not.toContain("&amp;");
   });
 });
