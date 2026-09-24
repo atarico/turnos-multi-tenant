@@ -63,8 +63,8 @@ declare
   v_tenant_b uuid;
   v_visible  uuid[];
 begin
-  insert into auth.users (email) values ('a@test.com') returning id into v_user_a;
-  insert into auth.users (email) values ('b@test.com') returning id into v_user_b;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'a@test.com') returning id into v_user_a;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'b@test.com') returning id into v_user_b;
 
   insert into public.tenants (slug, name, country)
     values ('pa-uno', 'Negocio A', 'AR') returning id into v_tenant_a;
@@ -105,7 +105,7 @@ declare
   v_total   int;
   v_visible int;
 begin
-  insert into auth.users (email) values ('root@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id) values (v_admin);
 
   insert into public.tenants (slug, name, country) values ('pa-tres', 'Negocio C', 'AR');
@@ -137,7 +137,7 @@ declare
   v_visible  int;
   v_nulos    int;
 begin
-  insert into auth.users (email) values ('nadie@test.com') returning id into v_huerfano;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'nadie@test.com') returning id into v_huerfano;
 
   perform set_config('request.jwt.claim.sub', v_huerfano::text, true);
   select count(*) into v_visible from public.auth_tenant_ids();
@@ -192,7 +192,7 @@ declare
   v_reales   int;
   v_escribio boolean := false;
 begin
-  insert into auth.users (email) values ('intruso@test.com') returning id into v_intruso;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'intruso@test.com') returning id into v_intruso;
 
   -- Control positivo: como owner hay filas de verdad para tapar. Sin esto,
   -- el `= 0` de abajo podría estar mirando una tabla vacía.
@@ -254,8 +254,8 @@ declare
   v_visto  int;
   v_real   int;
 begin
-  insert into auth.users (email) values ('root6@test.com') returning id into v_admin;
-  insert into auth.users (email) values ('dueno6@test.com') returning id into v_dueno;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root6@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'dueno6@test.com') returning id into v_dueno;
   insert into public.platform_admins (user_id) values (v_admin);
 
   insert into public.tenants (slug, name, country)
@@ -304,7 +304,7 @@ declare
   v_visto   int;
   v_control int;
 begin
-  insert into auth.users (email) values ('vecino@test.com') returning id into v_vecino;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'vecino@test.com') returning id into v_vecino;
 
   insert into public.tenants (slug, name, country)
     values ('pa-propio', 'Negocio propio', 'AR') returning id into v_propio;
@@ -361,8 +361,8 @@ declare
   v_admin_ve  int;
   v_normal_ve int;
 begin
-  insert into auth.users (email) values ('root8@test.com') returning id into v_admin;
-  insert into auth.users (email) values ('normal8@test.com') returning id into v_normal;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root8@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'normal8@test.com') returning id into v_normal;
   insert into public.platform_admins (user_id) values (v_admin);
 
   insert into public.tenants (slug, name, country)
@@ -419,7 +419,7 @@ declare
   v_creo     int;
   v_escribio boolean := false;
 begin
-  insert into auth.users (email) values ('root9@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root9@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id) values (v_admin);
 
   select id into v_ajeno from public.tenants where slug = 'pa-ajeno';
@@ -478,7 +478,7 @@ declare
   v_despues int;
   v_total   int;
 begin
-  insert into auth.users (email) values ('ex@test.com') returning id into v_ex;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'ex@test.com') returning id into v_ex;
   insert into public.tenants (slug, name, country)
     values ('pa-diez', 'Negocio Diez', 'AR') returning id into v_suyo;
   insert into public.memberships (user_id, tenant_id, role)
@@ -529,7 +529,7 @@ declare
   v_ve    int;
   v_total int;
 begin
-  insert into auth.users (email) values ('root11@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root11@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id) values (v_admin);
 
   -- El fixture inserta los negocios a mano, sin pasar por `create_business`,
@@ -578,7 +578,7 @@ declare
   v_ve     int;
   v_real   int;
 begin
-  insert into auth.users (email) values ('root12@test.com') returning id into v_admin;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'root12@test.com') returning id into v_admin;
   insert into public.platform_admins (user_id) values (v_admin);
 
   select id into v_ajeno from public.tenants where slug = 'pa-ajeno';

@@ -320,7 +320,7 @@ begin
   -- contesta "Turno inexistente" y este caso pasaría a probar la RLS en vez
   -- del freno. Hace falta un dueño de verdad: usuario, membresía y el claim.
   -- Mismo andamio que `tenants_column_grants.sql`.
-  insert into auth.users (email) values ('vencido@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'vencido@test.com') returning id into v_user;
   insert into public.memberships (user_id, tenant_id, role)
     values (v_user, v.tenant_id, 'owner');
   perform set_config('request.jwt.claim.sub', v_user::text, true);

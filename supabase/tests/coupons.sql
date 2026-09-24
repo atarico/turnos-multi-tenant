@@ -255,7 +255,7 @@ declare
   v_leyo       boolean := false;
   v_canjeo     boolean := false;
 begin
-  insert into auth.users (email) values ('cupon@test.com') returning id into v_user;
+  insert into auth.users (id, email) values (gen_random_uuid(), 'cupon@test.com') returning id into v_user;
   insert into public.coupons (code, discount_bps) values ('SECRETO', 9900);
 
   perform set_config('request.jwt.claim.sub', v_user::text, true);

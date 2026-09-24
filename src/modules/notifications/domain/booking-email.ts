@@ -67,6 +67,71 @@ function escapeHtml(value: string): string {
 }
 
 /**
+ * Marca interna de "esto ya es HTML de verdad, no lo escapes de nuevo".
+ *
+ * Es un `Symbol` que este módulo no exporta: nadie de afuera puede armar un
+ * objeto que la tenga, así que un string cualquiera nunca puede hacerse pasar
+ * por HTML ya construido. Es la diferencia entre "confío en que esto es
+ * seguro" y "esto es seguro porque no hay otra forma de construirlo".
+ */
+const RAW_HTML = Symbol("rawHtml");
+
+/** HTML ya armado —vía `raw()` o vía el propio tag `html`—, listo para
+ * insertarse en otra plantilla sin volver a escaparse. */
+interface RawHtml {
+  readonly [RAW_HTML]: true;
+  readonly value: string;
+}
+
+function isRawHtml(value: unknown): value is RawHtml {
+  return typeof value === "object" && value !== null && RAW_HTML in value;
+}
+
+/**
+ * Escotilla de escape para HTML que YA es HTML —como las filas condicionales
+ * (`staffRow`, `emailRow`) que arma este archivo—, no un dato suelto. Usarla
+ * con un dato sin armar (un nombre, un mail) sería reabrir el agujero que
+ * el tag `html` existe para cerrar.
+ */
+function raw(value: string): RawHtml {
+  return { [RAW_HTML]: true, value };
+}
+
+type HtmlInterpolable = string | number | RawHtml | null | undefined;
+
+/**
+ * Tagged template que arma HTML escapando CADA valor interpolado, sin
+ * excepciones que haya que acordarse de aplicar.
+ *
+ * Antes de esto, cada plantilla decidía a mano qué escapar —y así quedaron
+ * afuera `tenantName`, `serviceName` y `staffName`, más las dos plantillas
+ * que no escapaban nada—. Ese diseño depende de que nadie se olvide, y
+ * alguien se olvidó. Con el tag, olvidarse deja de ser posible: el único
+ * modo de meter algo en el HTML es a través de `html\`...\``, y ese camino
+ * siempre escapa. Lo único que se salva es lo que ya pasó por `raw()` o por
+ * otro `html\`...\`` —así las filas condicionales se componen sin quedar
+ * doblemente escapadas—, y eso sólo porque la marca de `raw()` no se puede
+ * falsificar con un string común.
+ *
+ * `null`/`undefined` se interpolan como string vacío: es la forma que ya
+ * usan las filas condicionales de este archivo cuando el dato no está.
+ */
+function html(strings: TemplateStringsArray, ...values: HtmlInterpolable[]): RawHtml {
+  let result = strings[0];
+  values.forEach((value, i) => {
+    if (value === null || value === undefined) {
+      result += "";
+    } else if (isRawHtml(value)) {
+      result += value.value;
+    } else {
+      result += escapeHtml(String(value));
+    }
+    result += strings[i + 1];
+  });
+  return raw(result);
+}
+
+/**
  * El mail de confirmación de una reserva.
  *
  * Es lo ÚNICO que le queda al cliente: hasta que esto existió, reservaba, veía
@@ -100,18 +165,19 @@ export function buildBookingConfirmation(data: BookingEmailData): BookingEmail {
     `Si necesitás cambiarlo o cancelarlo, escribile al negocio.\n`;
 
   const staffRow = data.staffName
-    ? `<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
-    : "";
+    ? html`<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
+    : raw("");
 
-  const html =
-    `<p>Hola ${data.customerName}, tu turno quedó confirmado.</p>` +
-    `<h2>${data.tenantName}</h2>` +
-    `<table>` +
-    `<tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>` +
-    staffRow +
-    `<tr><td><strong>Cuándo:</strong></td><td>${when}</td></tr>` +
-    `</table>` +
-    `<p>Si necesitás cambiarlo o cancelarlo, escribile al negocio.</p>`;
+  const htmlBody = html`
+    <p>Hola ${data.customerName}, tu turno quedó confirmado.</p>
+    <h2>${data.tenantName}</h2>
+    <table>
+      <tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>
+      ${staffRow}
+      <tr><td><strong>Cuándo:</strong></td><td>${when}</td></tr>
+    </table>
+    <p>Si necesitás cambiarlo o cancelarlo, escribile al negocio.</p>
+  `;
 
   return {
     // El negocio va en el asunto porque es lo que se lee sin abrir, y es el
@@ -119,7 +185,7 @@ export function buildBookingConfirmation(data: BookingEmailData): BookingEmail {
     // mails. La fecha lo acompaña por lo mismo.
     subject: `Tu turno en ${data.tenantName} — ${when}`,
     text,
-    html,
+    html: htmlBody.value,
   };
 }
 
@@ -151,23 +217,24 @@ export function buildBookingReminder(data: BookingEmailData): BookingEmail {
     `Si no vas a poder venir, avisale al negocio así puede liberar el lugar.\n`;
 
   const staffRow = data.staffName
-    ? `<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
-    : "";
+    ? html`<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
+    : raw("");
 
-  const html =
-    `<p>Hola ${data.customerName}, te recordamos tu turno de mañana.</p>` +
-    `<h2>${when}</h2>` +
-    `<table>` +
-    `<tr><td><strong>Dónde:</strong></td><td>${data.tenantName}</td></tr>` +
-    `<tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>` +
-    staffRow +
-    `</table>` +
-    `<p>Si no vas a poder venir, avisale al negocio así puede liberar el lugar.</p>`;
+  const htmlBody = html`
+    <p>Hola ${data.customerName}, te recordamos tu turno de mañana.</p>
+    <h2>${when}</h2>
+    <table>
+      <tr><td><strong>Dónde:</strong></td><td>${data.tenantName}</td></tr>
+      <tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>
+      ${staffRow}
+    </table>
+    <p>Si no vas a poder venir, avisale al negocio así puede liberar el lugar.</p>
+  `;
 
   return {
     subject: `Mañana tenés turno en ${data.tenantName} — ${when}`,
     text,
-    html,
+    html: htmlBody.value,
   };
 }
 
@@ -198,25 +265,26 @@ export function buildNewBookingForTenant(data: BookingEmailData): BookingEmail {
     `Cliente: ${data.customerName}${withEmail}\n`;
 
   const staffRow = data.staffName
-    ? `<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
-    : "";
+    ? html`<tr><td><strong>Con:</strong></td><td>${data.staffName}</td></tr>`
+    : raw("");
   const emailRow = data.customerEmail
-    ? `<tr><td><strong>Mail:</strong></td><td>${escapeHtml(data.customerEmail)}</td></tr>`
-    : "";
+    ? html`<tr><td><strong>Mail:</strong></td><td>${data.customerEmail}</td></tr>`
+    : raw("");
 
-  const html =
-    `<h2>Te llegó una reserva nueva en ${data.tenantName}</h2>` +
-    `<table>` +
-    `<tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>` +
-    staffRow +
-    `<tr><td><strong>Cuándo:</strong></td><td>${when}</td></tr>` +
-    `<tr><td><strong>Cliente:</strong></td><td>${escapeHtml(data.customerName)}</td></tr>` +
-    emailRow +
-    `</table>`;
+  const htmlBody = html`
+    <h2>Te llegó una reserva nueva en ${data.tenantName}</h2>
+    <table>
+      <tr><td><strong>Servicio:</strong></td><td>${data.serviceName}</td></tr>
+      ${staffRow}
+      <tr><td><strong>Cuándo:</strong></td><td>${when}</td></tr>
+      <tr><td><strong>Cliente:</strong></td><td>${data.customerName}</td></tr>
+      ${emailRow}
+    </table>
+  `;
 
   return {
     subject: `Reserva nueva en ${data.tenantName} — ${when}`,
     text,
-    html,
+    html: htmlBody.value,
   };
 }
