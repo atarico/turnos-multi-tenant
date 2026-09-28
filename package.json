@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:sql": "bash scripts/test-sql.sh"
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
