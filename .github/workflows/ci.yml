@@ -35,3 +35,27 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  sql:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # The job only starts once the database accepts connections.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      # psql comes preinstalled on ubuntu-latest; the script needs nothing else.
+      - name: SQL tests
+        run: bash scripts/test-sql.sh
