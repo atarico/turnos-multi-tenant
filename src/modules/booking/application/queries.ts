@@ -48,6 +48,8 @@ interface BookingRow {
   service_id: string;
   starts_at: string;
   ends_at: string;
+  payment_status: string;
+  payment_expires_at: string | null;
 }
 
 const toService = (r: ServiceRow): BookableService => ({
@@ -458,16 +460,22 @@ export async function sumMonthlyRevenue(
  * `service_id` no es nullable acá pese a serlo en la tabla: el CHECK
  * `bookings_service_link_or_terminal` garantiza el vínculo mientras el turno
  * siga en `LIVE_STATUSES`, que es exactamente el filtro de esta consulta.
+ *
+ * Un hold de pago VENCIDO ('awaiting' con `payment_expires_at <= now`) no ocupa
+ * cupo: es el mismo predicado que `create_booking()` y `public_booking_load` en
+ * la base, y se filtra acá con `now` inyectado para que el panel no ofrezca
+ * menos franjas de las que la base deja reservar.
  */
 export async function getBookingLoad(
   staffId: string,
   rangeStartIso: string,
   rangeEndIso: string,
+  now: Date = new Date(),
 ): Promise<Result<BookingLoad[]>> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("bookings")
-    .select("service_id, starts_at, ends_at")
+    .select("service_id, starts_at, ends_at, payment_status, payment_expires_at")
     .eq("staff_id", staffId)
     .in("status", LIVE_STATUSES)
     .lt("starts_at", rangeEndIso)
@@ -477,10 +485,17 @@ export async function getBookingLoad(
     return err(appError("load_query_failed", "No pudimos cargar la agenda del profesional."));
   }
   return ok(
-    (data as BookingRow[]).map((r) => ({
-      serviceId: r.service_id,
-      startsAt: r.starts_at,
-      endsAt: r.ends_at,
-    })),
+    (data as BookingRow[])
+      .filter((r) => !isExpiredPaymentHold(r, now))
+      .map((r) => ({
+        serviceId: r.service_id,
+        startsAt: r.starts_at,
+        endsAt: r.ends_at,
+      })),
   );
 }
+
+const isExpiredPaymentHold = (r: BookingRow, now: Date): boolean =>
+  r.payment_status === "awaiting" &&
+  r.payment_expires_at !== null &&
+  new Date(r.payment_expires_at).getTime() <= now.getTime();

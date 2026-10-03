@@ -19,6 +19,7 @@ import {
   bookingCeilingState,
   limitsFor,
   planLabel,
+  TRIAL_PLAN,
 } from "@/modules/billing/domain/plan";
 import { priceUsdCentsFor } from "@/modules/billing/domain/price";
 import {
@@ -80,7 +81,11 @@ export default async function SuscripcionPage({
   // Hay una cortesía EN EFECTO cuando lo que el negocio puede usar difiere de
   // lo que paga. No hace falta mirar la fecha: `getCurrentTenant` ya descartó
   // las vencidas, y una cortesía que no mejora nada no tiene nada que anunciar.
-  const courtesy = tenant.plan !== tenant.paid_plan;
+  // Una prueba viva también sube el plan efectivo, y NO es una cortesía: si el
+  // plan efectivo es justo el de la prueba, la explica el cartel de la prueba.
+  // Una cortesía mayor que la prueba sí se anuncia como cortesía.
+  const trialPlan = Boolean(tenant.trial_active) && tenant.plan === TRIAL_PLAN;
+  const courtesy = tenant.plan !== tenant.paid_plan && !trialPlan;
 
   const trialDays =
     subscription && isInTrial(subscription, now)
@@ -299,6 +304,13 @@ export default async function SuscripcionPage({
           <p className="mt-2 text-sm text-muted">
             Prueba gratis · te quedan {trialDays}{" "}
             {trialDays === 1 ? "día" : "días"}. Todavía no se te cobró nada.
+          </p>
+        )}
+
+        {trialPlan && (
+          <p className="mt-2 text-sm text-muted">
+            Tu prueba gratis incluye todo lo de {planLabel(TRIAL_PLAN)}. Si al
+            terminar elegís un plan menor, vas a tener lo de ese plan.
           </p>
         )}
 

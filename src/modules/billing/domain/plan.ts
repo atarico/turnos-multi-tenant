@@ -49,6 +49,20 @@ const PLAN_RANK: Record<PlanTier, number> = {
 };
 
 /**
+ * El plan mínimo que tiene un negocio durante una prueba gratis VIVA.
+ *
+ * Una prueba tiene que mostrar el producto, no una versión recortada: por eso
+ * mientras dura, el plan efectivo es al menos este. Hoy es `pro`; cuando
+ * WhatsApp y el resto de las funciones estén en producción se cambia a
+ * `premium`. Es una sola constante a propósito.
+ *
+ * Tiene un espejo en SQL: el literal de `public.tenant_effective_plan` (ver
+ * `20261003120002_trial_grants_pro.sql`). Se cambian JUNTOS, con una migración
+ * nueva que redefina la función.
+ */
+export const TRIAL_PLAN: PlanTier = "pro";
+
+/**
  * El mejor de dos planes.
  *
  * Existe para que un regalo nunca empeore lo comprado: ver `effectivePlan`.
