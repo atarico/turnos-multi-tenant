@@ -28,6 +28,12 @@ export interface Tenant {
   plan: PlanTier;
   /** Lo que la pasarela cobra. La columna cruda; sólo la mueve el webhook. */
   paid_plan: PlanTier;
+  /**
+   * Hay una prueba gratis VIVA. Distingue "tenés Pro por la prueba" de "tenés
+   * Pro de regalo" (cortesía) cuando `plan !== paid_plan`. Opcional: sólo lo
+   * pone `withEffectivePlan`; ausente se lee como `false`.
+   */
+  trial_active?: boolean;
   /** Plan regalado por un operador, o `null`. */
   plan_courtesy: PlanTier | null;
   /** Hasta cuándo dura el regalo. `null` con cortesía = hasta que la saquen. */
