@@ -1138,4 +1138,53 @@ begin
   end if;
 end $$;
 
+-- ------------------------------------------------------------
+-- Caso 15: create_booking() es del PANEL: un logueado que no es miembro no
+--          reserva (saltearía el pago); un miembro y el servidor sí.
+-- ------------------------------------------------------------
+do $$
+declare
+  v_a uuid; v_owner_a uuid; v_owner_b uuid; v_stranger uuid;
+  v_staff uuid; v_service uuid; v_slug text; v_base timestamptz;
+  v_user uuid; v_rechazado boolean;
+  b public.bookings;
+begin
+  select tenant_a, owner_a, owner_b, stranger, staff_id, service_id, slug, base
+    into v_a, v_owner_a, v_owner_b, v_stranger, v_staff, v_service, v_slug, v_base from t_ids;
+  perform pg_temp.set_state('pro', 'connected', true);
+
+  foreach v_user in array array[v_stranger, v_owner_b] loop
+    perform set_config('request.jwt.claim.sub', v_user::text, true);
+    v_rechazado := false;
+    set local role authenticated;
+    begin
+      perform public.create_booking(v_slug, v_staff, v_service, v_base + interval '3 days 8 hours', 'Intruso');
+    exception when insufficient_privilege then
+      v_rechazado := true;
+    end;
+    reset role;
+    if not v_rechazado then
+      raise exception 'CASO 15: un no-miembro (%) reservó con create_booking.', v_user;
+    end if;
+  end loop;
+  perform set_config('request.jwt.claim.sub', v_owner_a::text, true);
+  set local role authenticated;
+  b := public.create_booking(v_slug, v_staff, v_service, v_base + interval '3 days 8 hours', 'Miembro');
+  reset role;
+  if b.status <> 'confirmed' then
+    raise exception 'CASO 15: el miembro no pudo reservar (%).', b.status;
+  end if;
+
+  perform set_config('request.jwt.claim.sub', '', true);
+  set local role service_role;
+  b := public.create_public_booking(
+    v_slug, v_staff, v_service, v_base + interval '3 days 9 hours',
+    'Cliente', 'ip-hash-15', null, '1122334455'
+  );
+  reset role;
+  if b.payment_status <> 'awaiting' then
+    raise exception 'CASO 15: el camino del servidor dejó de crear el hold (%).', b.payment_status;
+  end if;
+end $$;
+
 rollback;

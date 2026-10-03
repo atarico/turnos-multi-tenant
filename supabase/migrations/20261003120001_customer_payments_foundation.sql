@@ -294,6 +294,15 @@ begin
     raise exception 'Negocio inexistente' using errcode = 'P0002';
   end if;
 
+  -- ----- Un usuario logueado sólo reserva en SU negocio -----
+  -- `authenticated` ejecuta esta función SECURITY DEFINER (la usa el panel):
+  -- sin esto, cualquier registrado reservaba 'confirmed' en cualquier negocio,
+  -- salteando el pago. El servidor (sin `auth.uid()`) no se ve afectado.
+  if auth.uid() is not null
+     and v_tenant.id not in (select public.auth_tenant_ids()) then
+    raise exception 'No tenés acceso a este negocio' using errcode = '42501';
+  end if;
+
   -- ----- El negocio tiene que estar habilitado a recibir turnos -----
   if not public.tenant_takes_bookings(v_tenant.id) then
     raise exception 'Negocio sin plan activo' using errcode = 'P0001';
