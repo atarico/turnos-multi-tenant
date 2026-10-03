@@ -312,6 +312,44 @@ describe("SuscripcionPage", () => {
     );
   });
 
+  describe("durante una prueba gratis", () => {
+    // `getCurrentTenant` ya subió el plan efectivo a Pro: acá se ve cómo se lo
+    // cuenta al dueño. Una prueba NO es una cortesía y no puede leerse como tal.
+    const enPrueba: Tenant = {
+      ...tenant,
+      plan: "pro",
+      paid_plan: "basico",
+      trial_active: true,
+    };
+    const prueba = subscription({
+      status: "trialing",
+      plan: "basico",
+      trialEndsAt: new Date(Date.now() + 5 * DAY),
+    });
+
+    it("dice que la prueba incluye todo lo de Pro, sin hablar de cortesía", { timeout: 15000 }, async () => {
+      await renderPage({}, enPrueba, prueba);
+
+      expect(screen.getByText(/incluye todo lo de Pro/i)).toBeTruthy();
+      expect(screen.queryByText(/cortesía/i)).toBeNull();
+    });
+
+    it("una cortesía mejor que la prueba sigue anunciándose como cortesía", { timeout: 15000 }, async () => {
+      await renderPage(
+        {},
+        {
+          ...enPrueba,
+          plan: "premium",
+          plan_courtesy: "premium",
+          plan_courtesy_reason: "beta tester",
+        },
+        prueba,
+      );
+
+      expect(avisoDeCortesia().textContent).toMatch(/cortesía/i);
+    });
+  });
+
   /**
    * El próximo cobro se muestra en la zona horaria DEL NEGOCIO.
    *
