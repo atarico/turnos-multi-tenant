@@ -1,5 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
 import type { Subscription } from "@/modules/billing/domain/subscription";
@@ -449,6 +449,24 @@ describe("SuscripcionPage", () => {
  * después y no encuentra un solo rastro de lo que hizo.
  */
 describe("baja de suscripción", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Fija el reloj antes de un período escrito con fecha absoluta.
+   *
+   * Los casos que afirman "30 de septiembre" necesitan esa fecha literal en el
+   * cartel, así que no pueden usar un período relativo a `Date.now()`. Sin el
+   * reloj fijo, el 1 de octubre el período quedaba vencido y la pantalla pasaba
+   * a decir otra cosa: los tests se rompían por el calendario, no por el código.
+   * Sólo se finge `Date`; los timers reales siguen andando para el render.
+   */
+  function freezeClockAt(iso: string) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(iso));
+  }
+
   it("la ofrece cuando hay un cobro abierto", async () => {
     await renderPage({}, tenant, subscription({ status: "active" }));
 
@@ -504,6 +522,7 @@ describe("baja de suscripción", () => {
    * que perdió el mes que pagó.
    */
   it("dada de baja, dice hasta cuándo sigue tomando turnos", async () => {
+    freezeClockAt("2026-09-15T12:00:00Z");
     await renderPage(
       {},
       tenant,
@@ -577,6 +596,7 @@ describe("baja de suscripción", () => {
    * apura a pagar algo que ya tiene.
    */
   it("con el alta sin confirmar y días pagados, dice hasta cuándo sigue", async () => {
+    freezeClockAt("2026-09-15T12:00:00Z");
     await renderPage(
       {},
       tenant,
