@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,6 +23,7 @@ const options: PlanOption[] = [
     staff: 2,
     whatsappMessages: 0,
     bookingsPerMonth: 300,
+    onlinePayments: false,
   },
   {
     plan: "pro",
@@ -31,6 +32,7 @@ const options: PlanOption[] = [
     staff: 5,
     whatsappMessages: 800,
     bookingsPerMonth: 1500,
+    onlinePayments: true,
   },
   {
     plan: "premium",
@@ -39,6 +41,7 @@ const options: PlanOption[] = [
     staff: 15,
     whatsappMessages: 2000,
     bookingsPerMonth: 5000,
+    onlinePayments: true,
   },
 ];
 
@@ -239,5 +242,13 @@ describe("PlanPicker", () => {
 
     const item = featureItem(/Sin WhatsApp/);
     expect(item).not.toHaveTextContent(/próximamente/i);
+  });
+
+  it("Pro y Premium listan el cobro online con Mercado Pago; Básico no lo menciona", () => {
+    setup();
+
+    expect(screen.getAllByText("Cobro online con Mercado Pago")).toHaveLength(2);
+    const basico = screen.getByRole("heading", { name: "Básico" }).closest("div")!.parentElement!;
+    expect(within(basico).queryByText(/Mercado Pago/)).toBeNull();
   });
 });

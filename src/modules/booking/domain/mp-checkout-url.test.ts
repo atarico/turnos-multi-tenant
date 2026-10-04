@@ -9,12 +9,12 @@ describe("isMercadoPagoCheckoutUrl", () => {
     "https://www.mercadopago.com/checkout/v1/redirect?pref_id=1",
     "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=1",
     "https://mercadopago.com.mx/checkout",
-    "https://www.mercadolibre.com/checkout",
   ])("acepta %s", (url) => {
     expect(isMercadoPagoCheckoutUrl(url)).toBe(true);
   });
 
   it.each([
+    ["mercadolibre, fuera de la lista", "https://www.mercadolibre.com/checkout"],
     ["http en vez de https", "http://www.mercadopago.com.ar/checkout"],
     ["otro dominio", "https://evil.example/checkout"],
     ["dominio que sólo CONTIENE mercadopago", "https://mercadopago.com.ar.evil.example/x"],

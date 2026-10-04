@@ -201,6 +201,32 @@ describe("BookingLifecycleActions con un turno pagado", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No pudimos cancelar el turno.");
   });
 
+  it("tras un error, Volver y reabrir el paso no arrastra el error viejo", async () => {
+    cancelPaidBookingAction.mockResolvedValue({ status: "error", message: "No pudimos cancelar el turno." });
+    render(<BookingLifecycleActions booking={paid()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar igual" }));
+    await screen.findByRole("alert");
+    await userEvent.click(screen.getByRole("button", { name: "Volver" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+
+    expect(screen.getByRole("button", { name: "Cancelar igual" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("si el turno cambia (otro turno o ya no pagado), el paso abierto se cierra", async () => {
+    const { rerender } = render(<BookingLifecycleActions booking={paid()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.getByRole("button", { name: "Cancelar igual" })).toBeInTheDocument();
+
+    // Reprogramado: sigue siendo el mismo id pero otra versión del turno.
+    rerender(<BookingLifecycleActions booking={{ ...paid(), paymentStatus: "not_required" }} />);
+    rerender(<BookingLifecycleActions booking={paid()} />);
+
+    expect(screen.queryByRole("button", { name: "Cancelar igual" })).toBeNull();
+  });
+
   it("un turno NO pagado sigue cancelándose con el submit de siempre", () => {
     render(<BookingLifecycleActions booking={upcoming("confirmed")} />);
 

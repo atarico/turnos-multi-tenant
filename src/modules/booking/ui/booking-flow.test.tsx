@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -326,6 +326,59 @@ describe("BookingFlow", () => {
       expect(assign).not.toHaveBeenCalled();
       expect(screen.queryByText("Te llevamos a Mercado Pago para pagar")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Confirmar reserva" })).toBeInTheDocument();
+    });
+
+    describe("redirección trabada", () => {
+      async function reachRedirecting() {
+        mockCreateBooking.mockResolvedValue({ status: "redirect", url: MP_URL });
+        const user = userEvent.setup({ delay: null });
+        await advanceWith(user, [payService]);
+        await user.click(screen.getByRole("button", { name: "Confirmar reserva" }));
+        await screen.findByText("Te llevamos a Mercado Pago para pagar");
+        return user;
+      }
+
+      afterEach(() => vi.useRealTimers());
+
+      it("al volver con el botón atrás (pageshow persistido) ofrece reintentar el pago", async () => {
+        const user = await reachRedirecting();
+
+        act(() => {
+          window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+        });
+
+        expect(screen.queryByText("Te llevamos a Mercado Pago para pagar")).not.toBeInTheDocument();
+        assign.mockClear();
+        await user.click(screen.getByRole("button", { name: "Volver a intentar el pago" }));
+        expect(assign).toHaveBeenCalledExactlyOnceWith(MP_URL);
+      });
+
+      it("un pageshow que no viene de la caché no destraba nada", async () => {
+        await reachRedirecting();
+
+        act(() => {
+          window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: false }));
+        });
+
+        expect(screen.getByText("Te llevamos a Mercado Pago para pagar")).toBeInTheDocument();
+      });
+
+      it("si la navegación no ocurre tras un rato, ofrece reintentar o elegir otro horario", async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        mockCreateBooking.mockResolvedValue({ status: "redirect", url: MP_URL });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        await advanceWith(user, [payService]);
+        await user.click(screen.getByRole("button", { name: "Confirmar reserva" }));
+        await screen.findByText("Te llevamos a Mercado Pago para pagar");
+
+        act(() => {
+          vi.advanceTimersByTime(15_000);
+        });
+
+        expect(screen.getByRole("button", { name: "Volver a intentar el pago" })).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Elegir otro horario" }));
+        expect(await screen.findByText("Elegí el servicio")).toBeInTheDocument();
+      });
     });
 
     it("el error de reintento deja el formulario para volver a intentar", async () => {
