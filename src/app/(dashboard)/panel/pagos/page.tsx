@@ -11,10 +11,19 @@ import { buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   disconnectMpAction,
+  markPaymentRefundedAction,
   toggleOnlinePaymentsAction,
 } from "@/modules/payments/application/actions";
-import { currentOwnerTenant } from "@/modules/payments/application/ownership";
+import {
+  canMarkRefunds,
+  currentOwnerTenant,
+} from "@/modules/payments/application/ownership";
 import { getPaymentsState } from "@/modules/payments/application/queries";
+import {
+  listPaymentsToRefund,
+  type PaymentToRefund,
+} from "@/modules/payments/application/refunds";
+import { formatPrice } from "@/modules/catalog/domain/money";
 import {
   PAYMENTS_FLAGS,
   parsePaymentsFlag,
@@ -57,9 +66,11 @@ export default async function PagosPage({ searchParams }: PagosPageProps) {
   if (!tenant) redirect("/panel");
 
   const flag = parsePaymentsFlag(mp);
-  const [owner, stateResult] = await Promise.all([
+  const [owner, stateResult, refundsResult, canRefund] = await Promise.all([
     currentOwnerTenant(),
     getPaymentsState(tenant.id),
+    listPaymentsToRefund(tenant.id),
+    canMarkRefunds(tenant.id),
   ]);
   const isOwner = owner.ok;
 
@@ -106,7 +117,79 @@ export default async function PagosPage({ searchParams }: PagosPageProps) {
           timezone={tenant.timezone}
         />
       )}
+
+      {/* Va aparte del estado de la cuenta: la plata ya cobrada se debe aunque
+          el plan haya bajado o la cuenta se haya roto. */}
+      {!refundsResult.ok ? (
+        <p className="mt-6 rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-3 text-sm text-danger">
+          No pudimos leer los pagos a devolver. Recargá la página en un momento.
+        </p>
+      ) : (
+        refundsResult.value.length > 0 && (
+          <RefundsSection
+            refunds={refundsResult.value}
+            canMark={canRefund}
+            timezone={tenant.timezone}
+          />
+        )
+      )}
     </div>
+  );
+}
+
+/**
+ * Pagos que el dueño todavía tiene que devolver (turnos pagados que se
+ * cancelaron, o plata cobrada de más). La devolución se hace en Mercado Pago;
+ * el botón sólo cierra el "a devolver" acá. Lo ve cualquier miembro, pero sólo
+ * dueño o admin lo pueden marcar (la base lo vuelve a exigir).
+ */
+function RefundsSection({
+  refunds,
+  canMark,
+  timezone,
+}: {
+  refunds: PaymentToRefund[];
+  canMark: boolean;
+  timezone: string;
+}) {
+  return (
+    <Card className="mt-6 p-5">
+      <h2 className="font-display text-lg font-semibold tracking-tight">
+        Pagos a devolver
+      </h2>
+      <p className="mt-2 text-sm text-muted">
+        Devolvelo desde tu cuenta de Mercado Pago y después marcalo acá. Si ya
+        lo devolviste desde Mercado Pago, se marca solo.
+      </p>
+      <ul className="mt-4 space-y-2">
+        {refunds.map((r) => (
+          <li
+            key={r.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-3.5 py-3"
+          >
+            <div className="min-w-0">
+              <p className="truncate font-medium text-foreground">{r.customerName}</p>
+              <p className="text-sm text-muted">
+                {format(new TZDate(r.startsAt, timezone), "d 'de' MMMM, HH:mm", { locale: es })}
+                {" · "}
+                {formatPrice(r.amountCents, r.currency)}
+              </p>
+              {r.mpPaymentId && (
+                <p className="text-xs text-faint">Pago de Mercado Pago {r.mpPaymentId}</p>
+              )}
+            </div>
+            {canMark && (
+              <form action={markPaymentRefundedAction}>
+                <input type="hidden" name="id" value={r.id} />
+                <button type="submit" className={buttonClasses({ variant: "secondary", size: "sm" })}>
+                  Marcar como devuelto
+                </button>
+              </form>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

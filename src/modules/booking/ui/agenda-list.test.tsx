@@ -6,6 +6,7 @@ import { AgendaList } from "./agenda-list";
 
 vi.mock("../application/booking-lifecycle", () => ({
   updateBookingStatusAction: vi.fn(),
+  cancelPaidBookingAction: vi.fn(),
 }));
 
 const TIMEZONE = "America/Argentina/Buenos_Aires";
@@ -20,6 +21,9 @@ const booking: AgendaBooking = {
   startsAt: "2026-07-23T14:30:00.000Z",
   endsAt: "2026-07-23T15:00:00.000Z",
   status: "confirmed",
+  paymentStatus: "not_required",
+  priceCents: 5000,
+  currency: "ARS",
 };
 
 describe("AgendaList", () => {
@@ -39,6 +43,26 @@ describe("AgendaList", () => {
     // La hora se muestra en la tz del negocio, no en UTC.
     expect(screen.getByText("11:30")).toBeInTheDocument();
     expect(screen.getByText("Confirmado")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["paid", "Pagado"],
+    ["awaiting", "Esperando pago"],
+    ["refund_due", "Devolución pendiente"],
+    ["refunded", "Devuelto"],
+  ] as const)("shows the %s payment badge next to the status", (paymentStatus, label) => {
+    render(<AgendaList bookings={[{ ...booking, paymentStatus }]} timezone={TIMEZONE} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText("Confirmado")).toBeInTheDocument();
+  });
+
+  it("shows no payment badge for a booking that never needed payment", () => {
+    render(<AgendaList bookings={[booking]} timezone={TIMEZONE} />);
+
+    for (const label of ["Pagado", "Esperando pago", "Devolución pendiente", "Devuelto"]) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
   });
 
   // La lista se usa para dos cosas distintas (próximos turnos y turnos a

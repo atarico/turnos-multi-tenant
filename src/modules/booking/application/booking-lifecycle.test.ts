@@ -4,6 +4,7 @@ import { idleState } from "@/core/action";
 import { appError, err, ok } from "@/core/result";
 
 import {
+  cancelPaidBookingAction,
   rescheduleBookingAction,
   updateBookingStatusAction,
 } from "./booking-lifecycle";
@@ -88,6 +89,9 @@ const booking = {
   startsAt: fromNow(-2 * HOUR),
   endsAt: fromNow(-HOUR),
   status: "confirmed" as const,
+  paymentStatus: "not_required" as const,
+  priceCents: 5000,
+  currency: "ARS",
   serviceId: "service-1",
   staffId: "staff-1",
 };
@@ -351,5 +355,94 @@ describe("rescheduleBookingAction", () => {
 
     expect(result.status).toBe("error");
     expect(rpc).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Cancelar un turno PAGADO. El CHECK `bookings_paid_not_cancelled` ya frena el
+ * UPDATE directo en la base; acá se prueba que la acción ni lo intente y que el
+ * camino correcto sea la RPC, sin tocar `bookings` desde la sesión.
+ */
+describe("updateBookingStatusAction sobre un turno pagado", () => {
+  const paid = { ...upcoming, paymentStatus: "paid" as const };
+
+  it("no intenta el UPDATE directo al cancelar un turno pagado", async () => {
+    getBooking.mockResolvedValue(ok(paid));
+
+    const result = await updateBookingStatusAction(idleState, statusForm("cancelled"));
+
+    expect(result.status).toBe("error");
+    expect(result.status === "error" && result.message).toMatch(/pagado/i);
+    expect(update).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("sí deja cancelar un turno que espera pago (hold) por el camino de siempre", async () => {
+    getBooking.mockResolvedValue(
+      ok({ ...upcoming, status: "pending", paymentStatus: "awaiting" }),
+    );
+
+    const result = await updateBookingStatusAction(idleState, statusForm("cancelled"));
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
+  it("sigue dejando confirmar o completar un turno pagado", async () => {
+    getBooking.mockResolvedValue(ok({ ...booking, paymentStatus: "paid" }));
+
+    const result = await updateBookingStatusAction(idleState, statusForm("completed"));
+
+    expect(result.status).toBe("success");
+    expect(update).toHaveBeenCalledWith({ status: "completed" });
+  });
+});
+
+describe("cancelPaidBookingAction", () => {
+  const form = (id = "booking-1") => {
+    const f = new FormData();
+    f.append("id", id);
+    return f;
+  };
+
+  it("cancela por la RPC con la sesión y avisa que hay que devolver la plata", async () => {
+    const result = await cancelPaidBookingAction(idleState, form());
+
+    expect(rpc).toHaveBeenCalledWith("cancel_paid_booking", { p_booking_id: "booking-1" });
+    expect(update).not.toHaveBeenCalled();
+    expect(result.status).toBe("success");
+    expect(result.status === "success" && result.message).toMatch(/Mercado Pago/);
+    expect(revalidatePath).toHaveBeenCalledWith("/panel");
+    expect(revalidatePath).toHaveBeenCalledWith("/panel/pagos");
+  });
+
+  it("pide un turno y no toca la base sin id", async () => {
+    const result = await cancelPaidBookingAction(idleState, form("  "));
+
+    expect(result.status).toBe("error");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("pide volver a ingresar sin negocio", async () => {
+    getCurrentTenant.mockResolvedValue(null);
+
+    const result = await cancelPaidBookingAction(idleState, form());
+
+    expect(result.status).toBe("error");
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Ese turno ya está cerrado", "Ese turno ya está cerrado: no se puede cancelar."],
+    ["Ese turno no está pagado", "Ese turno no está pagado. Recargá la agenda."],
+    ["No tenés acceso a este turno", "No tenés permiso para cancelar este turno."],
+    ["boom", "No pudimos cancelar el turno. Intentá de nuevo."],
+  ])("traduce el error %j de la base", async (raw, friendly) => {
+    rpc.mockResolvedValue({ error: { message: raw } });
+
+    const result = await cancelPaidBookingAction(idleState, form());
+
+    expect(result).toMatchObject({ status: "error", message: friendly });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

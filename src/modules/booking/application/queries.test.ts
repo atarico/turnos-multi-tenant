@@ -335,6 +335,36 @@ describe("listUpcomingBookings", () => {
     expect(result.ok && result.value[0]?.staffName).toBe("Juan");
   });
 
+  it("maps the payment fields the agenda badge and the paid-cancel step need", async () => {
+    fromData = [
+      {
+        id: "b1",
+        customer_name: "Ana",
+        customer_phone: null,
+        starts_at: "2026-09-01T10:00:00Z",
+        ends_at: "2026-09-01T10:30:00Z",
+        status: "confirmed",
+        service_name: "Corte",
+        staff_name: "Juan",
+        payment_status: "paid",
+        price_cents: 150000,
+        currency: "ARS",
+      },
+    ];
+
+    const result = await listUpcomingBookings("tenant-1");
+
+    expect(result.ok && result.value[0]).toMatchObject({
+      paymentStatus: "paid",
+      priceCents: 150000,
+      currency: "ARS",
+    });
+    const select = lastSelect();
+    expect(select).toContain("payment_status");
+    expect(select).toContain("price_cents");
+    expect(select).toContain("currency");
+  });
+
   it("selects the snapshot columns instead of the live services/staff joins", async () => {
     await listUpcomingBookings("tenant-1");
 
@@ -446,6 +476,29 @@ describe("la agenda del panel y la lista de cierre parten los turnos vivos", () 
 });
 
 describe("getBooking", () => {
+  it("reads payment_status so a cancel of a paid booking can be routed", async () => {
+    fromData = {
+      id: "b1",
+      customer_name: "Ana",
+      customer_phone: null,
+      starts_at: "2026-09-01T10:00:00Z",
+      ends_at: "2026-09-01T10:30:00Z",
+      status: "confirmed",
+      service_name: "Corte",
+      staff_name: "Juan",
+      payment_status: "paid",
+      price_cents: 5000,
+      currency: "ARS",
+      service_id: "s1",
+      staff_id: "p1",
+    };
+
+    const result = await getBooking("tenant-1", "b1");
+
+    expect(result.ok && result.value.paymentStatus).toBe("paid");
+    expect(lastSelect()).toContain("payment_status");
+  });
+
   it("returns null serviceId/staffId for a booking unlinked from a deleted parent", async () => {
     fromData = {
       id: "b1",

@@ -18,11 +18,14 @@ vi.mock("next/navigation", () => ({ redirect: (path: string) => redirect(path) }
 vi.mock("@/modules/tenants/application/queries", () => ({ getCurrentTenant: vi.fn() }));
 vi.mock("@/modules/payments/application/ownership", () => ({
   currentOwnerTenant: vi.fn(),
+  canMarkRefunds: vi.fn(),
 }));
+vi.mock("@/modules/payments/application/refunds", () => ({ listPaymentsToRefund: vi.fn() }));
 vi.mock("@/modules/payments/application/queries", () => ({ getPaymentsState: vi.fn() }));
 vi.mock("@/modules/payments/application/actions", () => ({
   toggleOnlinePaymentsAction: vi.fn(),
   disconnectMpAction: vi.fn(),
+  markPaymentRefundedAction: vi.fn(),
 }));
 
 const tenant: Tenant = {
@@ -60,6 +63,8 @@ async function renderPage(
     state?: State | "error";
     owner?: boolean;
     params?: Record<string, string | string[]>;
+    refunds?: Refund[] | "error";
+    canRefund?: boolean;
   } = {},
 ) {
   const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
@@ -79,9 +84,41 @@ async function renderPage(
       : { ok: true, value: state },
   );
 
+  const { canMarkRefunds } = await import("@/modules/payments/application/ownership");
+  const { listPaymentsToRefund } = await import("@/modules/payments/application/refunds");
+  vi.mocked(canMarkRefunds).mockResolvedValue(opts.canRefund ?? true);
+  vi.mocked(listPaymentsToRefund).mockResolvedValue(
+    opts.refunds === "error"
+      ? { ok: false, error: { code: "refunds_query_failed", message: "x" } }
+      : { ok: true, value: opts.refunds ?? [] },
+  );
+
   const { default: Page } = await import("./page");
   render(await Page({ searchParams: Promise.resolve(opts.params ?? {}) }));
 }
+
+type Refund = {
+  id: string;
+  bookingId: string;
+  customerName: string;
+  startsAt: string;
+  amountCents: number;
+  currency: string;
+  mpPaymentId: string | null;
+  kind: "extra" | "primary";
+};
+
+const refund = (over: Partial<Refund> = {}): Refund => ({
+  id: "p1",
+  bookingId: "b1",
+  customerName: "Ana Pérez",
+  startsAt: "2026-10-10T13:00:00Z",
+  amountCents: 150000,
+  currency: "ARS",
+  mpPaymentId: "123456",
+  kind: "primary",
+  ...over,
+});
 
 const T = { timeout: 15000 };
 
@@ -209,5 +246,65 @@ describe("PagosPage", () => {
     expect(document.body.textContent).not.toContain("5555-1234");
     expect(document.body.textContent).not.toContain("hackeado");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  describe("Pagos a devolver", () => {
+    it("sin pagos a devolver no pinta la sección", T, async () => {
+      await renderPage({ state: connected({ enabled: true }) });
+      expect(screen.queryByText("Pagos a devolver")).not.toBeInTheDocument();
+    });
+
+    it("lista cliente, fecha local, monto y id de Mercado Pago", T, async () => {
+      await renderPage({
+        state: connected({ enabled: true }),
+        refunds: [refund(), refund({ id: "p2", customerName: "Luis Gómez", mpPaymentId: null })],
+      });
+
+      expect(screen.getByRole("heading", { name: "Pagos a devolver" })).toBeInTheDocument();
+      expect(screen.getByText("Ana Pérez")).toBeInTheDocument();
+      // 13:00 UTC es 10:00 en Buenos Aires: la fecha va en la tz del negocio.
+      expect(screen.getAllByText(/10 de octubre.*10:00/)).toHaveLength(2);
+      expect(screen.getAllByText(/\$ 1\.500,00/)).toHaveLength(2);
+      expect(screen.getByText(/123456/)).toBeInTheDocument();
+      expect(screen.getByText("Luis Gómez")).toBeInTheDocument();
+    });
+
+    it("recuerda que la devolución se hace desde la cuenta de Mercado Pago", T, async () => {
+      await renderPage({ refunds: [refund()] });
+      expect(screen.getByText(/devolvelo desde tu cuenta de Mercado Pago/i)).toBeInTheDocument();
+    });
+
+    it("dueño o admin ven Marcar como devuelto, con el id del pago", T, async () => {
+      await renderPage({ refunds: [refund()], canRefund: true });
+
+      const button = screen.getByRole("button", { name: "Marcar como devuelto" });
+      expect(button.closest("form")?.querySelector('input[name="id"]')).toHaveValue("p1");
+    });
+
+    it("un miembro staff ve la lista pero no el botón", T, async () => {
+      await renderPage({ refunds: [refund()], canRefund: false });
+
+      expect(screen.getByText("Ana Pérez")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Marcar como devuelto" })).not.toBeInTheDocument();
+    });
+
+    it("también aparece en un plan sin pagos online: la plata ya cobrada sigue siendo deuda", T, async () => {
+      await renderPage({
+        tenant: { ...tenant, plan: "basico", paid_plan: "basico" },
+        refunds: [refund()],
+      });
+      expect(screen.getByText("Ana Pérez")).toBeInTheDocument();
+    });
+
+    it("si no puede leer la lista lo dice, sin mostrar controles", T, async () => {
+      await renderPage({ refunds: "error" });
+      expect(screen.getByText(/No pudimos leer los pagos a devolver/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Marcar como devuelto" })).not.toBeInTheDocument();
+    });
+
+    it("muestra el resultado de marcar la devolución por la bandera fija", T, async () => {
+      await renderPage({ params: { mp: "devuelto" } });
+      expect(screen.getByRole("status")).toHaveTextContent("Listo, marcamos la devolución como hecha.");
+    });
   });
 });

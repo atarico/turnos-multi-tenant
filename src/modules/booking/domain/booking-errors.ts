@@ -95,6 +95,13 @@ const RESCHEDULE_RULES: [needle: string, message: string][] = [
   ["ya está cerrado", "Ese turno ya está cerrado: no se puede reprogramar."],
 ];
 
+/** Errores que sólo puede tirar `cancel_paid_booking()`. */
+const PAID_CANCEL_RULES: [needle: string, message: string][] = [
+  ["ya está cerrado", "Ese turno ya está cerrado: no se puede cancelar."],
+  ["no está pagado", "Ese turno no está pagado. Recargá la agenda."],
+  ["no tenés acceso", "No tenés permiso para cancelar este turno."],
+];
+
 function translate(
   message: string,
   rules: [needle: string, message: string][],
@@ -141,5 +148,14 @@ export function friendlyRescheduleError(message: string): string {
     message,
     [...RESCHEDULE_RULES, ...SHARED_RULES],
     "No pudimos reprogramar el turno. Intentá de nuevo.",
+  );
+}
+
+/** Cancelar un turno PAGADO (`cancel_paid_booking()`). */
+export function friendlyPaidCancelError(message: string): string {
+  return translate(
+    message,
+    PAID_CANCEL_RULES,
+    "No pudimos cancelar el turno. Intentá de nuevo.",
   );
 }
