@@ -28,6 +28,13 @@ vi.mock("@/modules/booking/application/queries", () => ({
 vi.mock("@/modules/billing/application/queries", () => ({
   getCurrentSubscription: vi.fn(async () => null),
 }));
+// Por defecto, pagos apagados y sin cuenta: el panel no muestra ningún aviso.
+vi.mock("@/modules/payments/application/queries", () => ({
+  getPaymentsState: vi.fn(async () => ({
+    ok: true,
+    value: { enabled: false, account: null },
+  })),
+}));
 // Adónde va una cuenta sin negocio ya no lo decide esta página: la decisión
 // tiene dos respuestas y vive en su propio módulo, con sus propios tests. Acá
 // sólo se prueba que la página OBEDEZCA lo que le contesten.
@@ -436,4 +443,52 @@ describe("PanelPage", () => {
       }
     },
   );
+
+  it("ofrece el acceso a Pagos en la barra de navegación", { timeout: 15000 }, async () => {
+    const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+    vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+    const { default: PanelPage } = await import("./page");
+
+    render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole("link", { name: /^pagos$/i })).toHaveAttribute("href", "/panel/pagos");
+  });
+
+  describe("aviso de la conexión de pagos rota", () => {
+    async function renderWithPayments(
+      state: { enabled: boolean; account: { status: "connected" | "broken"; connectedAt: string } | null } | "error",
+    ) {
+      const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+      const { getPaymentsState } = await import("@/modules/payments/application/queries");
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(getPaymentsState).mockResolvedValue(
+        state === "error"
+          ? { ok: false, error: { code: "payments_state_failed", message: "x" } }
+          : { ok: true, value: state },
+      );
+      const { default: PanelPage } = await import("./page");
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+    }
+
+    const broken = { status: "broken" as const, connectedAt: "2026-10-01T15:00:00Z" };
+
+    it("pagos prendidos y cuenta rota: avisa y lleva a reconectar", { timeout: 15000 }, async () => {
+      await renderWithPayments({ enabled: true, account: broken });
+
+      const warning = screen.getByRole("alert");
+      expect(warning).toHaveTextContent(/mercado pago/i);
+      expect(warning).toHaveTextContent(/sin pagar/i);
+      expect(screen.getByRole("link", { name: /reconectar/i })).toHaveAttribute("href", "/panel/pagos");
+    });
+
+    it.each([
+      ["pagos apagados con cuenta rota", { enabled: false, account: broken }],
+      ["pagos prendidos con cuenta sana", { enabled: true, account: { status: "connected" as const, connectedAt: "2026-10-01T15:00:00Z" } }],
+      ["sin cuenta", { enabled: false, account: null }],
+      ["no se pudo leer el estado", "error" as const],
+    ])("no avisa: %s", { timeout: 15000 }, async (_name, state) => {
+      await renderWithPayments(state);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
 });
