@@ -92,21 +92,25 @@ function parseSignatureHeader(
 }
 
 /**
- * ¿La firma se emitió hace poco?
+ * El instante de la firma, en milisegundos, o `null` si el `ts` no es uno.
  *
  * El `ts` llega como texto y puede ser cualquier cosa: se exige que sea un
  * entero positivo antes de tratarlo como un momento. `Number("12abc")` da
  * `NaN`, y un `NaN` en una comparación devuelve `false` siempre — o sea que
  * sin este chequeo una firma con `ts` basura pasaría por "no está vencida".
  */
-function isFresh(ts: string, now: Date): boolean {
-  if (!/^\d+$/.test(ts)) return false;
+function signedAtMs(ts: string): number | null {
+  if (!/^\d+$/.test(ts)) return null;
 
   const raw = Number(ts);
-  if (!Number.isSafeInteger(raw) || raw <= 0) return false;
+  if (!Number.isSafeInteger(raw) || raw <= 0) return null;
 
-  const signedAtMs = raw >= MILLISECONDS_THRESHOLD ? raw : raw * 1000;
-  const ageMs = now.getTime() - signedAtMs;
+  return raw >= MILLISECONDS_THRESHOLD ? raw : raw * 1000;
+}
+
+/** ¿La firma se emitió hace poco? */
+function isFresh(signedAt: number, now: Date): boolean {
+  const ageMs = now.getTime() - signedAt;
 
   return ageMs <= MAX_SIGNATURE_AGE_MS && ageMs >= -MAX_CLOCK_SKEW_MS;
 }
@@ -158,6 +162,50 @@ function hashesMatch(expected: string, received: string): boolean {
 }
 
 /**
+ * Qué se sabe de la firma de una notificación.
+ *
+ *   · `valid` — el HMAC verifica Y la firma es reciente.
+ *   · `stale` — el HMAC verifica pero la firma está fuera de la ventana. O sea
+ *     que la notificación ES de Mercado Pago, sólo que llegó tarde (o es un
+ *     reintento, o una captura reproducida: la firma sola no distingue).
+ *   · `invalid` — todo lo demás: sin header, mal formado, hash que no
+ *     coincide, `ts` ilegible o secreto sin configurar.
+ *
+ * Existe para el webhook de pagos de los negocios: Mercado Pago reintenta
+ * hasta 15 minutos contra una ventana de 5, así que ahí un `stale` se acepta
+ * (el estado real se re-lee y la aplicación es idempotente). Quien no pueda
+ * apoyarse en eso debe exigir `valid`.
+ *
+ * Primero el HMAC y después la frescura: una firma vencida y además falsa es
+ * `invalid`, no `stale`, para que `stale` signifique SIEMPRE "auténtica".
+ */
+export type SignatureVerdict = "valid" | "stale" | "invalid";
+
+export function verifyWebhookSignature(input: WebhookSignatureInput): SignatureVerdict {
+  // El tipo dice `string`, pero esto se alimenta del entorno y un tipo no
+  // sobrevive al límite del proceso: una variable sin definir llega como
+  // `undefined` y `undefined.trim()` TIRA. Una excepción acá convierte un 401
+  // en un 500, que es la misma falla que `hashesMatch` se cuida de evitar. Un
+  // secreto sin configurar deja el portón CERRADO.
+  if (typeof input.secret !== "string" || !input.secret.trim()) return "invalid";
+
+  const parsed = parseSignatureHeader(input.signatureHeader);
+  if (!parsed) return "invalid";
+
+  const signedAt = signedAtMs(parsed.ts);
+  if (signedAt === null) return "invalid";
+
+  const manifest = buildManifest(input.dataId, input.requestId, parsed.ts);
+  const expected = createHmac("sha256", input.secret)
+    .update(manifest)
+    .digest("hex");
+
+  if (!hashesMatch(expected, parsed.v1)) return "invalid";
+
+  return isFresh(signedAt, input.now) ? "valid" : "stale";
+}
+
+/**
  * ¿Esta notificación la mandó Mercado Pago, y la mandó recién?
  *
  * Es el único portón del proyecto abierto a internet: al Route Handler que la
@@ -181,24 +229,5 @@ function hashesMatch(expected: string, received: string): boolean {
  * modificarle nada, sirve para siempre.
  */
 export function isValidWebhookSignature(input: WebhookSignatureInput): boolean {
-  // El tipo dice `string`, pero esto se alimenta del entorno y un tipo no
-  // sobrevive al límite del proceso: una variable sin definir llega como
-  // `undefined` y `undefined.trim()` TIRA. Una excepción acá convierte un 401
-  // en un 500, que es la misma falla que `hashesMatch` se cuida de evitar diez
-  // líneas más abajo. Un secreto sin configurar deja el portón CERRADO.
-  if (typeof input.secret !== "string" || !input.secret.trim()) return false;
-
-  const parsed = parseSignatureHeader(input.signatureHeader);
-  if (!parsed) return false;
-
-  // Antes del HMAC: una firma vencida no se salva por estar bien hecha, y
-  // chequearlo primero evita gastar el cálculo.
-  if (!isFresh(parsed.ts, input.now)) return false;
-
-  const manifest = buildManifest(input.dataId, input.requestId, parsed.ts);
-  const expected = createHmac("sha256", input.secret)
-    .update(manifest)
-    .digest("hex");
-
-  return hashesMatch(expected, parsed.v1);
+  return verifyWebhookSignature(input) === "valid";
 }

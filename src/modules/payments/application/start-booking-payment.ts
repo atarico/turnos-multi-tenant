@@ -56,6 +56,13 @@ export type StartPaymentOutcome =
 /** Códigos de `loadTenantAccessToken` / `createCheckoutPreference` que son de la CUENTA. */
 const ACCOUNT_LEVEL_CODES = new Set(["not_connected", "broken", "decrypt_failed", "mp_unauthorized"]);
 
+/**
+ * Falta configuración de la PLATAFORMA. Se resuelve igual que una cuenta caída
+ * (el turno se confirma sin pago: la agenda del negocio no se traba por algo
+ * nuestro), pero sin marcarle la conexión como rota, porque no lo está.
+ */
+const PLATFORM_CONFIG_CODE = "payments_not_configured";
+
 const startFailed = () =>
   err(
     appError(
@@ -76,6 +83,16 @@ async function resolveHold(
   }
 }
 
+/** Decide qué hacer con una falla al iniciar el pago, según de quién es. */
+function resolveStartFailure(
+  booking: HeldBooking,
+  code: string,
+): Promise<Result<StartPaymentOutcome>> {
+  if (ACCOUNT_LEVEL_CODES.has(code)) return confirmWithoutPayment(booking, { markBroken: true });
+  if (code === PLATFORM_CONFIG_CODE) return confirmWithoutPayment(booking, { markBroken: false });
+  return cancelAndAskRetry(booking.id);
+}
+
 /** Falla transitoria: el hold se cancela. Si ni eso se puede, vence solo a los 15 min. */
 async function cancelAndAskRetry(bookingId: string): Promise<Result<StartPaymentOutcome>> {
   await resolveHold("cancel_payment_hold", bookingId);
@@ -84,10 +101,11 @@ async function cancelAndAskRetry(bookingId: string): Promise<Result<StartPayment
 
 async function confirmWithoutPayment(
   booking: HeldBooking,
+  { markBroken }: { markBroken: boolean },
 ): Promise<Result<StartPaymentOutcome>> {
   // Si marcar la cuenta falla igual se confirma: el próximo cliente repetirá
   // el camino, y bloquear a ESTE por un error de bookkeeping no ayuda a nadie.
-  await markTenantMpAccountBroken(booking.tenant_id);
+  if (markBroken) await markTenantMpAccountBroken(booking.tenant_id);
 
   const released = await resolveHold("release_payment_hold_without_payment", booking.id);
   // No se pudo confirmar (p. ej. el hold venció mientras tanto): el turno no
@@ -115,11 +133,7 @@ export async function startBookingPayment(
   }
 
   const token = await loadTenantAccessToken(booking.tenant_id);
-  if (!token.ok) {
-    return ACCOUNT_LEVEL_CODES.has(token.error.code)
-      ? confirmWithoutPayment(booking)
-      : cancelAndAskRetry(booking.id);
-  }
+  if (!token.ok) return resolveStartFailure(booking, token.error.code);
 
   const preference = await createCheckoutPreference(token.value, {
     title: booking.service_name,
@@ -132,11 +146,7 @@ export async function startBookingPayment(
     expiresAt,
     payer: { name: booking.customer_name, email: booking.customer_email },
   });
-  if (!preference.ok) {
-    return ACCOUNT_LEVEL_CODES.has(preference.error.code)
-      ? confirmWithoutPayment(booking)
-      : cancelAndAskRetry(booking.id);
-  }
+  if (!preference.ok) return resolveStartFailure(booking, preference.error.code);
 
   // El pago se registra ANTES de devolver la URL: si no se puede, el cliente
   // nunca la recibe y el hold se cancela, en vez de dejarlo pagar algo que el
