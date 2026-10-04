@@ -61,3 +61,23 @@ export async function getPaymentsState(tenantId: string): Promise<Result<Payment
     );
   }
 }
+
+/**
+ * ¿Algún negocio tiene los pagos online prendidos? Sólo lo usa el cron, para
+ * saber si una config ausente es un deploy sin pagos (normal) o un problema.
+ */
+export async function anyTenantHasPaymentsEnabled(): Promise<Result<boolean>> {
+  try {
+    const { data, error } = await createAdminClient()
+      .from("tenants")
+      .select("id")
+      .eq("online_payments_enabled", true)
+      .limit(1);
+    if (error) throw error;
+    return ok(((data as unknown[] | null) ?? []).length > 0);
+  } catch {
+    return err(
+      appError("payments_state_failed", "No pudimos leer el estado de los pagos online."),
+    );
+  }
+}

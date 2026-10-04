@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 let tenantRow: { data: unknown; error: unknown } = { data: null, error: null };
 let accountRow: { data: unknown; error: unknown } = { data: null, error: null };
 let adminThrows = false;
+let enabledRows: { data: unknown; error: unknown } = { data: [], error: null };
+const eqCalls: Array<[string, unknown]> = [];
 const selected = vi.fn();
 
 vi.mock("@/lib/supabase/admin", () => ({
@@ -15,7 +17,11 @@ vi.mock("@/lib/supabase/admin", () => ({
             selected(table, cols);
             return chain;
           },
-          eq: () => chain,
+          eq: (col: string, val: unknown) => {
+            eqCalls.push([col, val]);
+            return chain;
+          },
+          limit: async () => enabledRows,
           maybeSingle: async () => (table === "tenants" ? tenantRow : accountRow),
         };
         return chain;
@@ -24,7 +30,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   },
 }));
 
-const { getPaymentsState } = await import("./queries");
+const { getPaymentsState, anyTenantHasPaymentsEnabled } = await import("./queries");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -73,5 +79,31 @@ describe("getPaymentsState", () => {
     expect((await getPaymentsState("t1")).ok).toBe(false);
     adminThrows = true;
     expect((await getPaymentsState("t1")).ok).toBe(false);
+  });
+});
+
+describe("anyTenantHasPaymentsEnabled", () => {
+  beforeEach(() => {
+    enabledRows = { data: [], error: null };
+    eqCalls.length = 0;
+  });
+
+  it("is true when some tenant has online payments on", async () => {
+    enabledRows = { data: [{ id: "t1" }], error: null };
+
+    expect(await anyTenantHasPaymentsEnabled()).toEqual({ ok: true, value: true });
+    expect(eqCalls).toContainEqual(["online_payments_enabled", true]);
+  });
+
+  it("is false when none does", async () => {
+    expect(await anyTenantHasPaymentsEnabled()).toEqual({ ok: true, value: false });
+  });
+
+  it("a read error is an error Result", async () => {
+    enabledRows = { data: null, error: { message: "x" } };
+    expect((await anyTenantHasPaymentsEnabled()).ok).toBe(false);
+
+    adminThrows = true;
+    expect((await anyTenantHasPaymentsEnabled()).ok).toBe(false);
   });
 });

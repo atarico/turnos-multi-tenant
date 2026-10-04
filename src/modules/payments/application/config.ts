@@ -46,3 +46,12 @@ export function stateSecret(): Result<string> {
   const secret = read("PAYMENTS_STATE_SECRET");
   return secret ? ok(secret) : notConfigured();
 }
+
+/**
+ * ¿Está toda la config de la plataforma? Para observabilidad (el cron avisa si
+ * falta mientras algún negocio tiene pagos prendidos); el resto del módulo
+ * sigue pidiendo cada valor por separado.
+ */
+export function paymentsConfigured(): boolean {
+  return mpClientCredentials().ok && encryptionKey().ok && stateSecret().ok;
+}

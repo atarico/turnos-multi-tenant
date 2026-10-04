@@ -145,7 +145,7 @@ export function buildAuthorizationUrl(input: AuthorizationUrlInput): string {
 // ------------------------------------------------------------- vencimiento
 
 /** Con cuánta anticipación se renueva: el access token dura unos 180 días. */
-const REFRESH_LEAD_MS = 30 * 24 * 60 * 60 * 1000;
+export const REFRESH_LEAD_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function tokenExpiresAt(now: Date, expiresInSeconds: number): Date {
   return new Date(now.getTime() + expiresInSeconds * 1000);
