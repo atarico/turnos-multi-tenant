@@ -243,6 +243,9 @@ function PaymentsBody({
         {isOwner && !broken && (
           <ToggleForm enable={!enabled} disabled={!enabled && !connected} />
         )}
+        {/* Con la cuenta rota no se puede activar, pero apagar siempre se puede:
+            la base lo permite y el dueño no tiene por qué reconectar para eso. */}
+        {isOwner && broken && enabled && <ToggleForm enable={false} />}
         {isOwner && !connected && !enabled && !broken && (
           <p className="mt-2 text-xs text-faint">
             Conectá tu cuenta de Mercado Pago para poder activarlos.

@@ -163,8 +163,17 @@ describe("PagosPage", () => {
       "href",
       "/api/payments/mp/connect",
     );
-    // No se puede ACTIVAR sobre una cuenta rota.
-    expect(screen.queryByRole("button", { name: /activar pagos online/i })).not.toBeInTheDocument();
+    // No se puede ACTIVAR sobre una cuenta rota. Anclado al principio: sin el
+    // `^`, "activar" también calza adentro de "Desactivar".
+    expect(screen.queryByRole("button", { name: /^activar pagos online/i })).not.toBeInTheDocument();
+  });
+
+  it("rota y prendida: el dueño todavía puede desactivarlos", T, async () => {
+    await renderPage({
+      state: { enabled: true, account: { status: "broken", connectedAt: CONNECTED_AT } },
+    });
+
+    expect(screen.getByRole("button", { name: /desactivar pagos online/i })).toBeEnabled();
   });
 
   it("quien no es dueño ve el estado pero ningún control", T, async () => {
