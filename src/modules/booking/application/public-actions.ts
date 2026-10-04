@@ -4,18 +4,27 @@ import { createHash } from "node:crypto";
 
 import { headers } from "next/headers";
 
-import { type ActionState, errorState, zodFieldErrors } from "@/core/action";
+import { errorState, zodFieldErrors } from "@/core/action";
 import { notifyBookingCreated } from "@/modules/notifications/application/notify-booking";
 import { appError, err, ok, type Result } from "@/core/result";
 import { serverEnv } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  startBookingPayment,
+  type HeldBooking,
+} from "@/modules/payments/application/start-booking-payment";
 import { getTenantBySlug } from "@/modules/tenants/application/queries";
 
 import { friendlyBookingError } from "../domain/booking-errors";
 import { resolveDayRange } from "../domain/day-range";
 import { bookingSchema } from "../domain/schemas";
 import { availableWeekdays, generateSlots } from "../domain/slots";
-import type { AvailableSlot, BookableStaff, WeeklyAvailability } from "../domain/types";
+import type {
+  AvailableSlot,
+  BookableStaff,
+  CreateBookingState,
+  WeeklyAvailability,
+} from "../domain/types";
 import {
   getPublicBookingLoad,
   getPublicService,
@@ -170,6 +179,15 @@ async function originFingerprint(): Promise<string> {
     .digest("hex");
 }
 
+/** La fila que devolvió `create_public_booking` es un hold esperando el pago. */
+function isHeldBooking(row: unknown): row is HeldBooking {
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    (row as { payment_status?: unknown }).payment_status === "awaiting"
+  );
+}
+
 /**
  * Crea la reserva del visitante anónimo.
  *
@@ -187,7 +205,7 @@ async function originFingerprint(): Promise<string> {
 export async function createPublicBookingAction(
   slug: string,
   input: unknown,
-): Promise<ActionState> {
+): Promise<CreateBookingState> {
   const parsed = bookingSchema.safeParse(input);
   if (!parsed.success) {
     return errorState("Revisá los datos de la reserva.", zodFieldErrors(parsed.error));
@@ -208,7 +226,7 @@ export async function createPublicBookingAction(
   } = parsed.data;
 
   const supabase = createAdminClient();
-  const { error } = await supabase.rpc("create_public_booking", {
+  const { data, error } = await supabase.rpc("create_public_booking", {
     p_tenant_slug: tenant.slug,
     p_staff_id: staff_id,
     p_service_id: service_id,
@@ -221,6 +239,21 @@ export async function createPublicBookingAction(
 
   if (error) {
     return errorState(friendlyBookingError(error.message));
+  }
+
+  // Si el negocio exige pago, la RPC dejó el turno en HOLD (pendiente y
+  // esperando el pago): todavía NO está confirmado. Se arranca el pago acá, con
+  // la fila que devolvió la RPC. Un negocio sin cobro (o un servicio gratis)
+  // vuelve `not_required` y sigue por el camino de siempre.
+  if (isHeldBooking(data)) {
+    const started = await startBookingPayment(data, { slug: tenant.slug });
+    if (!started.ok) return errorState(started.error.message);
+    // Va a pagar: la confirmación por mail sale cuando el pago se acredite, no
+    // ahora. Si el pago no pudo arrancar por la cuenta del negocio, el turno
+    // quedó confirmado sin cobro y sigue como cualquier reserva.
+    if (started.value.kind === "redirect") {
+      return { status: "redirect", url: started.value.url };
+    }
   }
 
   // EL AVISO VA DESPUÉS, Y NO PUEDE CAMBIAR NADA DE LO DE ARRIBA.

@@ -13,7 +13,6 @@ import {
   User,
 } from "lucide-react";
 
-import { type ActionState } from "@/core/action";
 import { type Result } from "@/core/result";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,17 +20,19 @@ import { cn } from "@/lib/utils/cn";
 import { formatPrice } from "@/modules/catalog/domain/money";
 
 import { customerSchema, type CustomerInput } from "../domain/schemas";
+import { isMercadoPagoCheckoutUrl } from "../domain/mp-checkout-url";
 import type {
   AvailableSlot,
   BookableService,
   BookableStaff,
+  CreateBookingState,
   WeeklyAvailability,
 } from "../domain/types";
 import { BookingCalendar } from "./booking-calendar";
 import { CustomerForm } from "./customer-form";
 import { SlotGrid } from "./slot-grid";
 
-type Step = "service" | "staff" | "schedule" | "customer" | "done";
+type Step = "service" | "staff" | "schedule" | "customer" | "redirecting" | "done";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "service", label: "Servicio" },
@@ -62,7 +63,7 @@ export interface BookingActions {
     staffId: string,
     dateStr: string,
   ): Promise<Result<AvailableSlot[]>>;
-  createBooking(input: unknown): Promise<ActionState>;
+  createBooking(input: unknown): Promise<CreateBookingState>;
 }
 
 interface BookingFlowProps {
@@ -200,6 +201,19 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
       setFormErrors(result.fieldErrors ?? {});
       return;
     }
+
+    if (result.status === "redirect") {
+      // La URL viene del servidor, pero se valida igual antes de navegar: sólo
+      // https y sólo dominios de Mercado Pago. Si no pasa, el turno queda en
+      // hold y vence solo; mejor un error que mandar al cliente a otro lado.
+      if (!isMercadoPagoCheckoutUrl(result.url)) {
+        setStepError("No pudimos abrir Mercado Pago. Probá de nuevo en un momento.");
+        return;
+      }
+      setStep("redirecting");
+      window.location.assign(result.url);
+      return;
+    }
     setStep("done");
   }
 
@@ -215,6 +229,10 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
     setCustomer(EMPTY_CUSTOMER);
     setFormErrors({});
     setStepError(null);
+  }
+
+  if (step === "redirecting") {
+    return <RedirectingToPayment />;
   }
 
   if (step === "done") {
@@ -341,6 +359,11 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
           onBack={() => setStep("schedule")}
         >
           <Summary service={service} staff={staff} slot={slot} date={date} />
+          {service?.payAtBooking && (
+            <p className="mt-3 rounded-xl border border-gold/30 bg-gold/10 px-3.5 py-2.5 text-sm font-medium text-foreground">
+              Se paga al reservar: {formatPrice(service.priceCents, service.currency)}
+            </p>
+          )}
           <div className="mt-5">
             <CustomerForm
               values={customer}
@@ -515,6 +538,22 @@ function LoadingRows() {
         />
       ))}
     </div>
+  );
+}
+
+function RedirectingToPayment() {
+  return (
+    <Card className="p-8 text-center" role="status">
+      <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-gold/30 bg-gold/10 text-gold">
+        <Clock className="size-7" />
+      </div>
+      <h2 className="mt-4 font-display text-xl font-semibold tracking-tight">
+        Te llevamos a Mercado Pago para pagar
+      </h2>
+      <p className="mt-1 text-sm text-muted">
+        Tu turno queda reservado unos minutos mientras pagás.
+      </p>
+    </Card>
   );
 }
 
