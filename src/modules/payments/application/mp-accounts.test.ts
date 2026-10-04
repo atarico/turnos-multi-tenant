@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { decryptToken, encryptToken } from "../domain/token-crypto";
 import {
   loadTenantAccessToken,
+  deleteTenantMpAccount,
   markTenantMpAccountBroken,
   saveTenantMpAccount,
 } from "./mp-accounts";
@@ -16,11 +17,13 @@ vi.mock("@/lib/env", () => ({ serverEnv: () => env }));
 let upsertResult: { error: unknown } = { error: null };
 let selectResult: { data: unknown; error: unknown } = { data: null, error: null };
 let updateResult: { error: unknown } = { error: null };
+let deleteResult: { error: unknown } = { error: null };
 let adminFailure: Error | null = null;
 
 const upsert = vi.fn();
 const update = vi.fn();
 const updateEq = vi.fn();
+const deleteEq = vi.fn();
 const select = vi.fn();
 const selectEq = vi.fn();
 const from = vi.fn();
@@ -45,6 +48,12 @@ vi.mock("@/lib/supabase/admin", () => ({
               },
             };
           },
+          delete: () => ({
+            eq: (col: string, val: string) => {
+              deleteEq(col, val);
+              return Promise.resolve(deleteResult);
+            },
+          }),
           select: (cols: string) => {
             select(cols);
             return {
@@ -73,6 +82,7 @@ beforeEach(() => {
   upsertResult = { error: null };
   selectResult = { data: null, error: null };
   updateResult = { error: null };
+  deleteResult = { error: null };
   adminFailure = null;
   vi.clearAllMocks();
 });
@@ -241,6 +251,28 @@ describe("markTenantMpAccountBroken", () => {
     for (const r of [a, b]) {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error.code).toBe("account_update_failed");
+    }
+  });
+});
+
+describe("deleteTenantMpAccount", () => {
+  it("borra la cuenta del negocio, y sólo la de ese negocio", async () => {
+    const result = await deleteTenantMpAccount("tenant-1");
+
+    expect(result.ok).toBe(true);
+    expect(from).toHaveBeenCalledWith("tenant_mp_accounts");
+    expect(deleteEq).toHaveBeenCalledWith("tenant_id", "tenant-1");
+  });
+
+  it("errores de la base y del cliente vuelven como Result", async () => {
+    deleteResult = { error: { message: "boom" } };
+    const a = await deleteTenantMpAccount("tenant-1");
+    adminFailure = new Error("x");
+    const b = await deleteTenantMpAccount("tenant-1");
+
+    for (const r of [a, b]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe("account_delete_failed");
     }
   });
 });

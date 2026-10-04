@@ -7,6 +7,7 @@ import { es } from "date-fns/locale";
 import {
   CalendarDays,
   Clock,
+  CreditCard,
   LogOut,
   Plus,
   Scissors,
@@ -29,6 +30,7 @@ import {
 } from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { formatPrice } from "@/modules/catalog/domain/money";
+import { getPaymentsState } from "@/modules/payments/application/queries";
 import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 import { COUNTRY_LABELS } from "@/modules/tenants/domain/countries";
@@ -81,6 +83,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     todayCountResult,
     revenueResult,
     subscription,
+    paymentsState,
   ] = await Promise.all([
     listUpcomingBookings(tenant.id, now),
     listBookingsToClose(tenant.id, now),
@@ -91,6 +94,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
       tenant.timezone,
     ),
     getCurrentSubscription(tenant.id),
+    getPaymentsState(tenant.id),
   ]);
 
   // Mismo `now` que la agenda: el cartel de prueba y las listas tienen que
@@ -99,6 +103,13 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     subscription && isInTrial(subscription, now)
       ? trialDaysLeft(subscription, now)
       : 0;
+  // Pagos prendidos con la cuenta rota: los clientes están reservando SIN pagar
+  // y el dueño no se enteró. Si no se pudo leer el estado, no se avisa nada: un
+  // cartel de alarma sobre un dato que no tenemos es peor que no decir.
+  const paymentsBroken =
+    paymentsState.ok &&
+    paymentsState.value.enabled &&
+    paymentsState.value.account?.status === "broken";
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
@@ -172,6 +183,13 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
             Profesionales
           </Link>
           <Link
+            href="/panel/pagos"
+            className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
+          >
+            <CreditCard className="size-4" />
+            Pagos
+          </Link>
+          <Link
             href="/panel/configuracion"
             className="inline-flex items-center gap-2 text-sm text-muted transition-colors hover:text-foreground"
           >
@@ -193,6 +211,24 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
           </form>
         </div>
       </header>
+
+      {paymentsBroken && (
+        <div
+          role="alert"
+          className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          <p>
+            Se rompió la conexión con tu Mercado Pago, así que tus clientes
+            están reservando sin pagar. Reconectala para volver a cobrar.
+          </p>
+          <Link
+            href="/panel/pagos"
+            className="font-medium underline underline-offset-4"
+          >
+            Reconectar
+          </Link>
+        </div>
+      )}
 
       <section className="mt-8 grid gap-4 sm:grid-cols-3">
         <MetricCard

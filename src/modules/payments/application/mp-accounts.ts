@@ -137,3 +137,23 @@ export async function markTenantMpAccountBroken(
   }
   return ok(undefined);
 }
+
+/**
+ * Borra la conexión del negocio (desconectar).
+ *
+ * Se borra la fila entera y no se la marca como rota: los tokens cifrados no
+ * tienen por qué seguir guardados cuando el dueño pidió desconectar. Quien
+ * llama debe haber verificado que la sesión es la DUEÑA: este cliente saltea
+ * RLS y borra lo que le pidan.
+ */
+export async function deleteTenantMpAccount(tenantId: string): Promise<Result<void>> {
+  try {
+    const { error } = await createAdminClient().from(TABLE).delete().eq("tenant_id", tenantId);
+    if (error) throw error;
+  } catch {
+    return err(
+      appError("account_delete_failed", "No pudimos desconectar la cuenta de Mercado Pago."),
+    );
+  }
+  return ok(undefined);
+}
