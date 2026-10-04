@@ -78,6 +78,14 @@ export type BookingStatus =
   | "completed"
   | "no_show";
 
+/** Estado de cobro del turno (espeja el enum `booking_payment_status`). */
+export type PaymentStatus =
+  | "not_required"
+  | "awaiting"
+  | "paid"
+  | "refund_due"
+  | "refunded";
+
 /**
  * Un turno tal como lo muestra la agenda del panel: con nombre de cliente,
  * servicio y profesional ya resueltos, más el estado. Lo consume la vista
@@ -93,6 +101,11 @@ export interface AgendaBooking {
   startsAt: string;
   endsAt: string;
   status: BookingStatus;
+  /** Cobro online del turno; el panel pinta un badge y decide cómo se cancela. */
+  paymentStatus: PaymentStatus;
+  /** Precio congelado al reservar: lo que el cliente pagó si `paymentStatus` es 'paid'. */
+  priceCents: number;
+  currency: string;
 }
 
 /**

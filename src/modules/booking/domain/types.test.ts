@@ -20,6 +20,9 @@ const base: BookingDetail = {
   startsAt: "2026-09-01T10:00:00Z",
   endsAt: "2026-09-01T10:30:00Z",
   status: "confirmed",
+  paymentStatus: "not_required",
+  priceCents: 5000,
+  currency: "ARS",
   serviceId: "service-1",
   staffId: "staff-1",
 };

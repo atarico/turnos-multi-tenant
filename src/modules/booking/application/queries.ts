@@ -9,6 +9,7 @@ import type {
   BookingDetail,
   BookingLoad,
   BookingStatus,
+  PaymentStatus,
   WeeklyAvailability,
 } from "../domain/types";
 
@@ -169,6 +170,9 @@ interface AgendaBookingRow {
   // se le pone un fallback: la columna es NOT NULL desde el origen.
   service_name: string;
   staff_name: string;
+  payment_status: PaymentStatus;
+  price_cents: number;
+  currency: string;
 }
 
 interface BookingDetailRow extends AgendaBookingRow {
@@ -193,7 +197,7 @@ const LIVE_STATUSES: BookingStatus[] = ["pending", "confirmed"];
  * reescribiría el historial si se leyera el nombre vivo.
  */
 const AGENDA_COLUMNS =
-  "id, customer_name, customer_phone, starts_at, ends_at, status, service_name, staff_name";
+  "id, customer_name, customer_phone, starts_at, ends_at, status, service_name, staff_name, payment_status, price_cents, currency";
 
 const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   id: r.id,
@@ -204,6 +208,9 @@ const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   startsAt: r.starts_at,
   endsAt: r.ends_at,
   status: r.status,
+  paymentStatus: r.payment_status,
+  priceCents: r.price_cents,
+  currency: r.currency,
 });
 
 /**

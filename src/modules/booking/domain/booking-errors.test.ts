@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   friendlyBookingError,
+  friendlyPaidCancelError,
   friendlyOwnerBookingError,
   friendlyRescheduleError,
 } from "./booking-errors";
@@ -175,6 +176,22 @@ describe("negocio sin plan activo", () => {
   it("el dueño NO recibe los mensajes del camino anónimo", () => {
     expect(friendlyOwnerBookingError("demasiadas reservas seguidas")).toBe(
       "No pudimos crear la reserva. Revisá los datos e intentá de nuevo.",
+    );
+  });
+});
+
+describe("friendlyPaidCancelError", () => {
+  it.each([
+    ["Ese turno ya está cerrado", "Ese turno ya está cerrado: no se puede cancelar."],
+    ["Ese turno no está pagado", "Ese turno no está pagado. Recargá la agenda."],
+    ["No tenés acceso a este turno", "No tenés permiso para cancelar este turno."],
+  ])("traduce %j", (raw, friendly) => {
+    expect(friendlyPaidCancelError(raw)).toBe(friendly);
+  });
+
+  it("no filtra el texto crudo de la base ante un error desconocido", () => {
+    expect(friendlyPaidCancelError("deadlock detected")).toBe(
+      "No pudimos cancelar el turno. Intentá de nuevo.",
     );
   });
 });

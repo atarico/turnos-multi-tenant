@@ -7,7 +7,7 @@ import { wroteRows } from "@/core/db-write";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
-import { friendlyRescheduleError } from "../domain/booking-errors";
+import { friendlyPaidCancelError, friendlyRescheduleError } from "../domain/booking-errors";
 import {
   canReschedule,
   canTransition,
@@ -41,6 +41,16 @@ function revalidateAgenda(slug: string) {
   revalidatePath("/panel");
   revalidatePath(`/${slug}`);
 }
+
+/**
+ * Lo que se le dice al dueño cuando intenta cancelar un turno pagado por el
+ * camino de siempre. La UI no debería mandar este POST (muestra antes el paso
+ * "¿reprogramás?"), pero la acción es alcanzable a mano y la base tiene el CHECK
+ * `bookings_paid_not_cancelled`: acá se corta con un mensaje en vez de dejar que
+ * el UPDATE reviente con un error crudo.
+ */
+const PAID_CANCEL_BLOCKED =
+  "Este turno está pagado: reprogramalo o cancelalo desde el aviso de turno pagado, así queda registrada la devolución.";
 
 /**
  * Mueve un turno a otro estado del ciclo de vida.
@@ -85,6 +95,13 @@ export async function updateBookingStatusAction(
     return errorState(
       "Ese turno todavía no terminó: vas a poder cerrarlo cuando pase su horario.",
     );
+  }
+
+  // Un turno pagado no se cancela con el UPDATE directo: la plata ya entró y
+  // hay que dejar rastro de la devolución. Tiene su propia acción
+  // (`cancelPaidBookingAction`), que va por la RPC.
+  if (nextStatus === "cancelled" && current.value.paymentStatus === "paid") {
+    return errorState(PAID_CANCEL_BLOCKED);
   }
 
   const supabase = await createClient();
@@ -158,4 +175,40 @@ export async function rescheduleBookingAction(
 
   revalidateAgenda(tenant.slug);
   return { status: "success", message: "Turno reprogramado." };
+}
+
+/**
+ * Cancela un turno PAGADO vía la RPC `cancel_paid_booking()`: lo deja
+ * 'cancelled' + 'refund_due' en un solo UPDATE, para que la plata nunca quede
+ * sin rastro. Va con la sesión, no con el cliente admin: la función decide por
+ * `auth.uid()` si es miembro del negocio (el mismo permiso que cancelar hoy), y
+ * revalida estado y pago con el turno bloqueado, así que el cliente no manda
+ * ni el estado ni el monto.
+ *
+ * La devolución en sí la hace el dueño desde su cuenta de Mercado Pago: el
+ * mensaje de éxito se lo dice, y `/panel/pagos` queda con el pago a devolver.
+ */
+export async function cancelPaidBookingAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return errorState("No pudimos identificar el turno.");
+
+  const tenant = await getCurrentTenant();
+  if (!tenant) return errorState("No encontramos tu negocio. Volvé a ingresar.");
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("cancel_paid_booking", {
+    p_booking_id: id,
+  });
+  if (error) return errorState(friendlyPaidCancelError(error.message));
+
+  revalidateAgenda(tenant.slug);
+  revalidatePath("/panel/pagos");
+  return {
+    status: "success",
+    message:
+      "Turno cancelado. Devolvele el pago a tu cliente desde tu cuenta de Mercado Pago; lo ves en Pagos a devolver.",
+  };
 }

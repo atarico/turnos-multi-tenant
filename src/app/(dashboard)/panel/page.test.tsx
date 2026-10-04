@@ -74,6 +74,9 @@ const agendaBooking = (
   startsAt: fromNow(offsetMs),
   endsAt: fromNow(offsetMs + HOUR),
   status: "confirmed",
+  paymentStatus: "not_required",
+  priceCents: 5000,
+  currency: "ARS",
 });
 
 /** Una suscripción en prueba que vence dentro de `offsetMs` desde ahora. */

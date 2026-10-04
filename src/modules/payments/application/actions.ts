@@ -6,7 +6,11 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
 
-import { classifyToggleError, type PaymentsFlag } from "../domain/panel-flags";
+import {
+  classifyRefundError,
+  classifyToggleError,
+  type PaymentsFlag,
+} from "../domain/panel-flags";
 import { deleteTenantMpAccount } from "./mp-accounts";
 import { currentOwnerTenant } from "./ownership";
 
@@ -83,4 +87,36 @@ export async function disconnectMpAction(): Promise<void> {
 
   const deleted = await deleteTenantMpAccount(owner.value.tenantId);
   return done(deleted.ok ? "desconectado" : "fallo");
+}
+
+/**
+ * Marca como devuelto un pago a devolver (`mark_payment_refunded`).
+ *
+ * Con la sesión, no con el cliente admin: la función decide por `auth.uid()` si
+ * es dueño o admin del negocio de ESE pago, y revalida el estado con las filas
+ * bloqueadas. Del formulario sólo se lee el id del pago; el negocio, el estado
+ * y el monto salen de la base. La devolución en sí la hizo el dueño desde su
+ * cuenta de Mercado Pago: esto sólo cierra el "a devolver".
+ */
+export async function markPaymentRefundedAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return done("fallo");
+
+  const tenant = await getCurrentTenant();
+  if (!tenant) return redirect("/ingresar");
+
+  let flag: PaymentsFlag = "devuelto";
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("mark_payment_refunded", {
+      p_booking_payment_id: id,
+    });
+    if (error) flag = classifyRefundError(error);
+  } catch {
+    flag = "fallo";
+  }
+
+  // El badge del turno en la agenda también cambia (Devolución pendiente → Devuelto).
+  if (flag === "devuelto") revalidatePath("/panel");
+  return done(flag);
 }
