@@ -508,7 +508,7 @@ describe("getBooking", () => {
 describe("holds de pago vencidos en la agenda", () => {
   const AT = new Date("2026-10-05T12:00:00.000Z");
   const orFilter = () => lastBuilder().or.mock.calls[0]?.[0] as string | undefined;
-  const EXPECTED = `payment_status.neq.awaiting,payment_expires_at.gt.${AT.toISOString()}`;
+  const EXPECTED = `payment_status.neq.awaiting,payment_expires_at.gt."${AT.toISOString()}"`;
 
   it("listUpcomingBookings excludes expired holds using the injected instant", async () => {
     await listUpcomingBookings("tenant-1", AT);

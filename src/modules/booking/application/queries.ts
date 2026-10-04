@@ -215,7 +215,9 @@ const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
  * PostgREST sigan siendo correctos. `now` se recibe: nadie lee el reloj acá.
  */
 const excludeExpiredPaymentHolds = (now: Date): string =>
-  `payment_status.neq.awaiting,payment_expires_at.gt.${now.toISOString()}`;
+  // Entre comillas: el ISO trae `.` y `:`, caracteres reservados de la gramática
+  // de PostgREST que, sin comillas, parten el valor.
+  `payment_status.neq.awaiting,payment_expires_at.gt."${now.toISOString()}"`;
 
 /**
  * Turnos del negocio que todavía NO terminaron: 'pending'/'confirmed', del más
