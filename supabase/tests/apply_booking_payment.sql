@@ -318,6 +318,49 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
+-- Caso 6e: devolver el cobro EXTRA no devuelve el turno. Sólo el pago que
+--          pagó el turno mueve su payment_status; la devolución del extra
+--          cierra su propia fila. Una devolución de un pago desconocido no
+--          toca el turno.
+-- ------------------------------------------------------------
+do $$
+declare
+  v_id uuid; v_res text; b public.bookings; p public.booking_payments;
+begin
+  v_id := pg_temp.mk_booking('pending', 'awaiting', now() + interval '10 minutes', 47);
+  perform pg_temp.apply(v_id, 'mp-6e-first', 'approved');
+  perform pg_temp.apply(v_id, 'mp-6e-extra', 'approved');
+
+  -- El dueño devuelve el EXTRA: el turno sigue pagado.
+  v_res := pg_temp.apply(v_id, 'mp-6e-extra', 'refunded');
+  select * into b from public.bookings where id = v_id;
+  if v_res <> 'applied' or b.status <> 'confirmed' or b.payment_status <> 'paid' then
+    raise exception 'CASO 6e-1: devolver el extra no debía devolver el turno, dio % + %/%.',
+      v_res, b.status, b.payment_status;
+  end if;
+  select * into p from public.booking_payments where mp_payment_id = 'mp-6e-extra';
+  if p.status <> 'refunded' then
+    raise exception 'CASO 6e-1: el pago extra debía quedar refunded, dio %.', p.status;
+  end if;
+
+  -- Una devolución de un pago que no conocemos: el turno no cambia.
+  v_res := pg_temp.apply(v_id, 'mp-6e-unknown', 'refunded');
+  select * into b from public.bookings where id = v_id;
+  if v_res <> 'ignored' or b.payment_status <> 'paid' then
+    raise exception 'CASO 6e-2: una devolución desconocida no debía tocar el turno, dio % + %.',
+      v_res, b.payment_status;
+  end if;
+
+  -- El dueño devuelve el pago del turno: ahora sí, refunded.
+  v_res := pg_temp.apply(v_id, 'mp-6e-first', 'refunded');
+  select * into b from public.bookings where id = v_id;
+  if v_res <> 'applied' or b.payment_status <> 'refunded' then
+    raise exception 'CASO 6e-3: devolver el pago del turno debía dejarlo refunded, dio % + %.',
+      v_res, b.payment_status;
+  end if;
+end $$;
+
+-- ------------------------------------------------------------
 -- Caso 6d: pagó a tiempo pero se procesa tarde (el hold ya venció).
 --   - A tiempo + hay lugar  -> confirmed / paid.
 --   - A tiempo + sin lugar  -> refund_due, cancelado (la franja se ocupó).

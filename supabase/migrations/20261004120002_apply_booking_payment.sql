@@ -129,6 +129,8 @@ declare
   v_approved   timestamptz := coalesce(p_approved_at, now());
   -- Qué estado se anota en booking_payments (suele ser el de Mercado Pago).
   v_row_status text := p_status;
+  -- Cómo estaba anotado ESTE pago antes del aviso (null si no lo conocemos).
+  v_prev_row_status text;
 begin
   -- El turno tiene que ser de ESE negocio. Sin esto, un pago legítimo de un
   -- negocio podría apuntarse a un turno de otro con sólo cambiar la
@@ -206,9 +208,22 @@ begin
     end if;
 
   elsif p_status in ('refunded', 'charged_back') then
-    -- 'refund_due' también: es el camino principal de la devolución manual (el
-    -- dueño devuelve desde Mercado Pago y el aviso cierra el "a devolver").
-    if v_booking.payment_status in ('paid', 'refund_due') then
+    -- Sólo la devolución del pago que PAGÓ el turno mueve al turno. La de un
+    -- pago extra (anotado 'refund_due': cobro doble, plata no esperada)
+    -- cierra su propia fila y nada más — devolver el sobrante no le quita el
+    -- pago al turno. Una devolución de un pago que no conocemos no toca nada.
+    select status into v_prev_row_status
+      from public.booking_payments
+     where mp_payment_id = p_mp_payment_id
+       and booking_id = v_booking.id;
+
+    if v_prev_row_status = 'refund_due' then
+      v_result := 'applied';
+    -- 'refund_due' en el TURNO también: es el camino principal de la
+    -- devolución manual (el dueño devuelve desde Mercado Pago y el aviso
+    -- cierra el "a devolver").
+    elsif v_prev_row_status is not null
+          and v_booking.payment_status in ('paid', 'refund_due') then
       update public.bookings
          set payment_status = 'refunded'
        where id = v_booking.id;
