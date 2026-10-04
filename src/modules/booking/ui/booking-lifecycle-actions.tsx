@@ -65,7 +65,15 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
     cancelPaidBookingAction,
     idleState,
   );
-  const [askingPaidCancel, setAskingPaidCancel] = useState(false);
+  // El paso queda ligado a la versión del turno que lo abrió: si el turno cambia
+  // (se reprogramó, se pagó o dejó de estarlo, es otra fila), el paso se cierra
+  // solo en vez de quedar abierto sobre un estado que ya no es el que se vio.
+  const stepKey = `${booking.id}:${booking.status}:${booking.paymentStatus}:${booking.startsAt}`;
+  const [askingFor, setAskingFor] = useState<string | null>(null);
+  const askingPaidCancel = askingFor === stepKey;
+  // `useActionState` no se puede resetear: al cerrar el paso se recuerda qué
+  // resultado ya se vio, para no mostrarle un error viejo al reabrirlo.
+  const [dismissedPaidState, setDismissedPaidState] = useState<unknown>(null);
 
   // Tras cancelar con éxito la fila puede seguir montada un instante: el aviso
   // de la devolución no puede depender de que `transitions` no esté vacío.
@@ -94,7 +102,7 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
                 type="button"
                 size="sm"
                 variant="danger"
-                onClick={() => setAskingPaidCancel(true)}
+                onClick={() => setAskingFor(stepKey)}
               >
                 {BOOKING_ACTION_LABELS[status]}
               </Button>
@@ -149,7 +157,10 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
               type="button"
               size="sm"
               variant="secondary"
-              onClick={() => setAskingPaidCancel(false)}
+              onClick={() => {
+                setAskingFor(null);
+                setDismissedPaidState(paidState);
+              }}
             >
               Volver
             </Button>
@@ -158,7 +169,7 @@ export function BookingLifecycleActions({ booking }: BookingLifecycleActionsProp
             Si lo cancelás, la devolución la hacés vos desde tu cuenta de
             Mercado Pago.
           </p>
-          {paidState.status === "error" && (
+          {paidState.status === "error" && paidState !== dismissedPaidState && (
             <p role="alert" className="text-xs text-danger">
               {paidState.message}
             </p>

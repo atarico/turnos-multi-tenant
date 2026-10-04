@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
@@ -34,6 +34,10 @@ vi.mock("@/modules/payments/application/queries", () => ({
     ok: true,
     value: { enabled: false, account: null },
   })),
+}));
+// Por defecto, nada para devolver: el panel no muestra el recordatorio.
+vi.mock("@/modules/payments/application/refunds", () => ({
+  listPaymentsToRefund: vi.fn(async () => ({ ok: true, value: [] })),
 }));
 // Adónde va una cuenta sin negocio ya no lo decide esta página: la decisión
 // tiene dos respuestas y vive en su propio módulo, con sus propios tests. Acá
@@ -492,6 +496,54 @@ describe("PanelPage", () => {
     ])("no avisa: %s", { timeout: 15000 }, async (_name, state) => {
       await renderWithPayments(state);
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("recordatorio de pagos a devolver", () => {
+    async function renderWithRefunds(result: "error" | number) {
+      const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+      const { listPaymentsToRefund } = await import("@/modules/payments/application/refunds");
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(listPaymentsToRefund).mockResolvedValue(
+        result === "error"
+          ? { ok: false, error: { code: "refunds_failed", message: "x" } }
+          : {
+              ok: true,
+              value: Array.from({ length: result }, (_, i) => ({
+                id: `p${i}`,
+                bookingId: `b${i}`,
+                customerName: "Cliente",
+                startsAt: "2026-10-10T15:00:00Z",
+                amountCents: 1000,
+                currency: "ARS",
+                mpPaymentId: null,
+                kind: "extra" as const,
+              })),
+            },
+      );
+      const { default: PanelPage } = await import("./page");
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+    }
+
+    it("con un pago a devolver lo dice en singular y lleva a Pagos", { timeout: 15000 }, async () => {
+      await renderWithRefunds(1);
+
+      const banner = screen.getByRole("status");
+      expect(banner).toHaveTextContent("Tenés 1 pago a devolver");
+      expect(within(banner).getByRole("link")).toHaveAttribute("href", "/panel/pagos");
+    });
+
+    it("con varios lo dice en plural", { timeout: 15000 }, async () => {
+      await renderWithRefunds(3);
+      expect(screen.getByRole("status")).toHaveTextContent("Tenés 3 pagos a devolver");
+    });
+
+    it.each([
+      ["no hay nada para devolver", 0],
+      ["no se pudo leer la lista", "error" as const],
+    ])("no avisa: %s", { timeout: 15000 }, async (_name, result) => {
+      await renderWithRefunds(result);
+      expect(screen.queryByText(/a devolver/)).not.toBeInTheDocument();
     });
   });
 });
