@@ -207,6 +207,17 @@ const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
 });
 
 /**
+ * Filtro PostgREST que deja afuera los holds de pago VENCIDOS ('awaiting' con
+ * `payment_expires_at <= now`): el mismo predicado que `create_booking()` y
+ * `getBookingLoad`. Un hold vencido no ocupa cupo y el cron de pagos lo cancela
+ * una vez por día; hasta entonces no puede figurar como "Pendiente" en la
+ * agenda. Va en la base y no en JS para que `count` y el tope de filas de
+ * PostgREST sigan siendo correctos. `now` se recibe: nadie lee el reloj acá.
+ */
+const excludeExpiredPaymentHolds = (now: Date): string =>
+  `payment_status.neq.awaiting,payment_expires_at.gt.${now.toISOString()}`;
+
+/**
  * Turnos del negocio que todavía NO terminaron: 'pending'/'confirmed', del más
  * cercano al más lejano. Embebe el nombre de servicio y profesional en la misma
  * consulta para pintar la agenda sin N+1.
@@ -239,6 +250,7 @@ export async function listUpcomingBookings(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
+    .or(excludeExpiredPaymentHolds(at))
     .gte("ends_at", at.toISOString())
     .order("starts_at");
 
@@ -275,6 +287,7 @@ export async function listBookingsToClose(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
+    .or(excludeExpiredPaymentHolds(at))
     .lt("ends_at", at.toISOString())
     .order("starts_at", { ascending: false });
 
@@ -353,6 +366,7 @@ export async function countBookingsOnDay(
   tenantId: string,
   dayStr: string,
   timezone: string,
+  now: Date = new Date(),
 ): Promise<Result<number>> {
   const range = resolveDayRange(dayStr, timezone);
   if (!range) {
@@ -365,6 +379,7 @@ export async function countBookingsOnDay(
     .select("id", { count: "exact", head: true })
     .eq("tenant_id", tenantId)
     .in("status", DAY_STATUSES)
+    .or(excludeExpiredPaymentHolds(now))
     .gte("starts_at", range.startIso)
     .lt("starts_at", range.endIso);
 
