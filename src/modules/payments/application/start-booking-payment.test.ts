@@ -135,6 +135,31 @@ describe("startBookingPayment: falla de la CUENTA", () => {
     expect(rpcCalls()).toEqual(["release_payment_hold_without_payment"]);
   });
 
+  /**
+   * Falta configuración de la PLATAFORMA, no de la cuenta: no es culpa del
+   * negocio, así que no se le marca la conexión como rota, pero tampoco se
+   * le bloquea la agenda — el turno se confirma sin pago, igual que con una
+   * cuenta caída.
+   */
+  it("sin configuración de la plataforma: confirma sin pago y NO marca la cuenta", async () => {
+    loadTenantAccessToken.mockResolvedValue(err(appError("payments_not_configured", "x")));
+
+    const result = await startBookingPayment(booking, context);
+
+    expect(result).toEqual({ ok: true, value: { kind: "confirmed_without_payment" } });
+    expect(markTenantMpAccountBroken).not.toHaveBeenCalled();
+    expect(rpcCalls()).toEqual(["release_payment_hold_without_payment"]);
+  });
+
+  it("sin configuración al armar la preferencia: tampoco marca la cuenta", async () => {
+    createCheckoutPreference.mockResolvedValue(err(appError("payments_not_configured", "x")));
+
+    const result = await startBookingPayment(booking, context);
+
+    expect(result).toEqual({ ok: true, value: { kind: "confirmed_without_payment" } });
+    expect(markTenantMpAccountBroken).not.toHaveBeenCalled();
+  });
+
   it("si el release falla (el hold ya venció), cancela el hold y pide reintentar", async () => {
     loadTenantAccessToken.mockResolvedValue(err(appError("broken", "x")));
     rpc.mockImplementation(async (fn) =>
@@ -159,7 +184,6 @@ describe("startBookingPayment: falla TRANSITORIA", () => {
     ["mp_bad_response", () => createCheckoutPreference.mockResolvedValue(err(appError("mp_bad_response", "x")))],
     ["mp_rejected", () => createCheckoutPreference.mockResolvedValue(err(appError("mp_rejected", "x")))],
     ["account_load_failed", () => loadTenantAccessToken.mockResolvedValue(err(appError("account_load_failed", "x")))],
-    ["payments_not_configured", () => loadTenantAccessToken.mockResolvedValue(err(appError("payments_not_configured", "x")))],
   ];
 
   it.each(transient)(

@@ -4,6 +4,9 @@ import { z } from "zod";
 
 import { appError, err, ok, type Result } from "@/core/result";
 
+import { notifyToken } from "../domain/notify-token";
+import { stateSecret } from "./config";
+
 /**
  * Preferencia de Checkout Pro del turno, creada con el token DEL NEGOCIO: la
  * plata va de quien paga a la cuenta de Mercado Pago del negocio, sin pasar
@@ -78,6 +81,12 @@ export async function createCheckoutPreference(
   accessToken: string,
   input: CheckoutPreferenceInput,
 ): Promise<Result<CheckoutPreference>> {
+  // El token `k` ata la URL de notificación a este negocio (ver `notify-token`).
+  // Sin el secreto no se crea la preferencia: saldría con una URL que el webhook
+  // descarta, y el cobro quedaría sin confirmarse.
+  const secret = stateSecret();
+  if (!secret.ok) return secret;
+
   const returnUrl = `${input.appUrl}/${input.slug}/reserva/${input.bookingId}`;
 
   const payload = {
@@ -91,9 +100,9 @@ export async function createCheckoutPreference(
         currency_id: input.currency,
       },
     ],
-    // El webhook (T5) vuelve a leer el pago y lo cruza con este id.
+    // El webhook vuelve a leer el pago y lo cruza con este id.
     external_reference: input.bookingId,
-    notification_url: `${input.appUrl}/api/webhooks/mercadopago/payments?tenant=${encodeURIComponent(input.tenantId)}`,
+    notification_url: `${input.appUrl}/api/webhooks/mercadopago/payments?tenant=${encodeURIComponent(input.tenantId)}&k=${notifyToken(secret.value, input.tenantId)}`,
     back_urls: { success: returnUrl, failure: returnUrl, pending: returnUrl },
     auto_return: "approved",
     // El pago termina aprobado o rechazado, nunca "en revisión".

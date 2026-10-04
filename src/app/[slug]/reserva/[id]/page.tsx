@@ -7,7 +7,12 @@ import { notFound } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { PublicHeader } from "@/modules/booking/ui/public-header";
 import { getBookingForReturn } from "@/modules/payments/application/booking-return";
-import { returnState, type ReturnState } from "@/modules/payments/domain/return-state";
+import { syncBookingPaymentFromReturn } from "@/modules/payments/application/sync-booking-payment";
+import {
+  RETURN_SYNC_BUDGET_MS,
+  returnState,
+  type ReturnState,
+} from "@/modules/payments/domain/return-state";
 import { getTenantBySlug } from "@/modules/tenants/application/queries";
 
 /**
@@ -18,8 +23,11 @@ import { getTenantBySlug } from "@/modules/tenants/application/queries";
  * NO recibe `searchParams` a propósito. Mercado Pago agrega `status`,
  * `payment_id`, etc. a la URL de retorno, pero los puede escribir cualquiera:
  * lo que se muestra sale sólo de nuestra base. Si el pago ya se acreditó, el
- * webhook (T5) habrá confirmado el turno; si todavía no, esta pantalla dice que
- * se está confirmando.
+ * webhook (T5) habrá confirmado el turno; si todavía no, esta pantalla le
+ * pregunta UNA vez a Mercado Pago por los pagos del turno (el mismo camino que
+ * el webhook) y vuelve a leer, así que el cliente ve "confirmado" sin esperar al
+ * aviso. Si eso falla —o no hay nada todavía— se dice que se está confirmando.
+ * La sincronización recibe sólo el negocio y el id del turno: nunca la URL.
  *
  * Es una página privada de una persona (el id es un uuid): fuera de los
  * buscadores.
@@ -46,13 +54,47 @@ const MESSAGES: Record<ReturnState, { title: string; body?: string }> = {
   other: { title: "Tu turno está registrado." },
 };
 
+/** `true` si la promesa terminó dentro del plazo (sea cual sea su resultado), `false` si no. */
+async function withinBudget(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([Promise.resolve(work).then(() => true as const), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default async function BookingReturnPage({ params }: ReturnPageProps) {
   const { slug, id } = await params;
 
   const tenant = await getTenantBySlug(slug);
   if (!tenant) notFound();
 
-  const loaded = await getBookingForReturn(tenant.id, id);
+  let loaded = await getBookingForReturn(tenant.id, id);
+
+  // Sólo mientras el hold espera el pago. El resultado no importa: lo que se
+  // muestra sale de la base, y un fallo de Mercado Pago no tumba la página.
+  if (loaded.ok && loaded.value && returnState(loaded.value, new Date()) === "awaiting") {
+    try {
+      // Con presupuesto: la página no espera a Mercado Pago más que esto. Si se
+      // agota, se rinde "confirmando" y el webhook termina el trabajo.
+      const finished = await withinBudget(
+        syncBookingPaymentFromReturn(tenant.id, id),
+        RETURN_SYNC_BUDGET_MS,
+      );
+      if (finished) {
+        const reread = await getBookingForReturn(tenant.id, id);
+        // Si la segunda lectura falla se conserva la primera, que ya era buena.
+        if (reread.ok) loaded = reread;
+      }
+    } catch {
+      // Falla en silencio: se muestra el estado que ya se leyó.
+    }
+  }
+
   // Un id de otro negocio, mal formado o inexistente da lo mismo: 404.
   if (loaded.ok && !loaded.value) notFound();
 
