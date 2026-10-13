@@ -53,6 +53,18 @@ export const PAYMENTS_FLAGS = {
     tone: "error",
     message: "Primero conectá tu cuenta de Mercado Pago.",
   },
+  devuelto: {
+    tone: "ok",
+    message: "Listo, marcamos la devolución como hecha.",
+  },
+  "devolucion-sin-permiso": {
+    tone: "error",
+    message: "Sólo el dueño o un administrador pueden marcar una devolución.",
+  },
+  "devolucion-no-pendiente": {
+    tone: "error",
+    message: "Ese pago ya no está pendiente de devolución. Recargá la pantalla.",
+  },
   fallo: {
     tone: "error",
     message: "No pudimos hacer el cambio. Intentá de nuevo en un momento.",
@@ -82,5 +94,21 @@ export function classifyToggleError(error: {
   const message = error.message ?? "";
   if (message.includes("plan Pro")) return "sin-plan";
   if (message.includes("no está conectado")) return "sin-conexion";
+  return "fallo";
+}
+
+/**
+ * Traduce el error de `mark_payment_refunded` a una bandera. 42501 es "no sos
+ * dueño ni admin" (también para un id que no existe: la base no distingue), y
+ * el P0001 de estado se reconoce por su mensaje. Lo demás es un fallo genérico.
+ */
+export function classifyRefundError(error: {
+  code?: string | null;
+  message?: string | null;
+}): PaymentsFlag {
+  if (error.code === "42501") return "devolucion-sin-permiso";
+  if ((error.message ?? "").includes("no está pendiente de devolución")) {
+    return "devolucion-no-pendiente";
+  }
   return "fallo";
 }

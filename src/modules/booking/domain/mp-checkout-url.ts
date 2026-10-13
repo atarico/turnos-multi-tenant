@@ -9,11 +9,13 @@
  *
  * Dominios: `mercadopago.com` y su variante por país (`.com.ar`, `.com.br`,
  * `.com.mx`, …) —ahí caen `www.` y `sandbox.` del `init_point` y del
- * `sandbox_init_point`— más `mercadolibre.com`. El dominio tiene que ser
+ * `sandbox_init_point`—. `mercadolibre.com` NO entra: la documentación sólo
+ * muestra hosts de `mercadopago.com` (`www.mercadopago.com.br`,
+ * `www.mercadopago.com`) y `sandbox.mercadopago.com.<cc>`. El dominio tiene que ser
  * EXACTO o un subdominio con punto: `evilmercadopago.com` y
  * `mercadopago.com.ar.evil.example` no pasan.
  */
-const MP_HOST = /(^|\.)(mercadopago\.com(\.[a-z]{2})?|mercadolibre\.com)$/;
+const MP_HOST = /(^|\.)mercadopago\.com(\.[a-z]{2})?$/;
 
 export function isMercadoPagoCheckoutUrl(value: string): boolean {
   let url: URL;
