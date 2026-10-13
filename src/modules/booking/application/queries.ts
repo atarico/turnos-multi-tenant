@@ -9,6 +9,7 @@ import type {
   BookingDetail,
   BookingLoad,
   BookingStatus,
+  PaymentStatus,
   WeeklyAvailability,
 } from "../domain/types";
 
@@ -169,6 +170,9 @@ interface AgendaBookingRow {
   // se le pone un fallback: la columna es NOT NULL desde el origen.
   service_name: string;
   staff_name: string;
+  payment_status: PaymentStatus;
+  price_cents: number;
+  currency: string;
 }
 
 interface BookingDetailRow extends AgendaBookingRow {
@@ -193,7 +197,7 @@ const LIVE_STATUSES: BookingStatus[] = ["pending", "confirmed"];
  * reescribiría el historial si se leyera el nombre vivo.
  */
 const AGENDA_COLUMNS =
-  "id, customer_name, customer_phone, starts_at, ends_at, status, service_name, staff_name";
+  "id, customer_name, customer_phone, starts_at, ends_at, status, service_name, staff_name, payment_status, price_cents, currency";
 
 const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   id: r.id,
@@ -204,7 +208,23 @@ const toAgendaBooking = (r: AgendaBookingRow): AgendaBooking => ({
   startsAt: r.starts_at,
   endsAt: r.ends_at,
   status: r.status,
+  paymentStatus: r.payment_status,
+  priceCents: r.price_cents,
+  currency: r.currency,
 });
+
+/**
+ * Filtro PostgREST que deja afuera los holds de pago VENCIDOS ('awaiting' con
+ * `payment_expires_at <= now`): el mismo predicado que `create_booking()` y
+ * `getBookingLoad`. Un hold vencido no ocupa cupo y el cron de pagos lo cancela
+ * una vez por día; hasta entonces no puede figurar como "Pendiente" en la
+ * agenda. Va en la base y no en JS para que `count` y el tope de filas de
+ * PostgREST sigan siendo correctos. `now` se recibe: nadie lee el reloj acá.
+ */
+const excludeExpiredPaymentHolds = (now: Date): string =>
+  // Entre comillas: el ISO trae `.` y `:`, caracteres reservados de la gramática
+  // de PostgREST que, sin comillas, parten el valor.
+  `payment_status.neq.awaiting,payment_expires_at.gt."${now.toISOString()}"`;
 
 /**
  * Turnos del negocio que todavía NO terminaron: 'pending'/'confirmed', del más
@@ -239,6 +259,7 @@ export async function listUpcomingBookings(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
+    .or(excludeExpiredPaymentHolds(at))
     .gte("ends_at", at.toISOString())
     .order("starts_at");
 
@@ -275,6 +296,7 @@ export async function listBookingsToClose(
     .select(AGENDA_COLUMNS)
     .eq("tenant_id", tenantId)
     .in("status", LIVE_STATUSES)
+    .or(excludeExpiredPaymentHolds(at))
     .lt("ends_at", at.toISOString())
     .order("starts_at", { ascending: false });
 
@@ -353,6 +375,7 @@ export async function countBookingsOnDay(
   tenantId: string,
   dayStr: string,
   timezone: string,
+  now: Date = new Date(),
 ): Promise<Result<number>> {
   const range = resolveDayRange(dayStr, timezone);
   if (!range) {
@@ -365,6 +388,7 @@ export async function countBookingsOnDay(
     .select("id", { count: "exact", head: true })
     .eq("tenant_id", tenantId)
     .in("status", DAY_STATUSES)
+    .or(excludeExpiredPaymentHolds(now))
     .gte("starts_at", range.startIso)
     .lt("starts_at", range.endIso);
 

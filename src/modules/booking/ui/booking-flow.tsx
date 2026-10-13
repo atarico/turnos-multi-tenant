@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import {
@@ -13,7 +13,6 @@ import {
   User,
 } from "lucide-react";
 
-import { type ActionState } from "@/core/action";
 import { type Result } from "@/core/result";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,17 +20,19 @@ import { cn } from "@/lib/utils/cn";
 import { formatPrice } from "@/modules/catalog/domain/money";
 
 import { customerSchema, type CustomerInput } from "../domain/schemas";
+import { isMercadoPagoCheckoutUrl } from "../domain/mp-checkout-url";
 import type {
   AvailableSlot,
   BookableService,
   BookableStaff,
+  CreateBookingState,
   WeeklyAvailability,
 } from "../domain/types";
 import { BookingCalendar } from "./booking-calendar";
 import { CustomerForm } from "./customer-form";
 import { SlotGrid } from "./slot-grid";
 
-type Step = "service" | "staff" | "schedule" | "customer" | "done";
+type Step = "service" | "staff" | "schedule" | "customer" | "redirecting" | "done";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "service", label: "Servicio" },
@@ -39,6 +40,9 @@ const STEPS: { key: Step; label: string }[] = [
   { key: "schedule", label: "Fecha y hora" },
   { key: "customer", label: "Cliente" },
 ];
+
+/** Cuánto se espera la navegación a Mercado Pago antes de ofrecer una salida. */
+const REDIRECT_STALL_MS = 15_000;
 
 const EMPTY_CUSTOMER: CustomerInput = {
   customer_name: "",
@@ -62,7 +66,7 @@ export interface BookingActions {
     staffId: string,
     dateStr: string,
   ): Promise<Result<AvailableSlot[]>>;
-  createBooking(input: unknown): Promise<ActionState>;
+  createBooking(input: unknown): Promise<CreateBookingState>;
 }
 
 interface BookingFlowProps {
@@ -105,6 +109,11 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // URL de Mercado Pago ya validada a la que se mandó al cliente: sirve para
+  // reintentar si la navegación no ocurrió o volvió con el botón atrás.
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [redirectStalled, setRedirectStalled] = useState(false);
 
   const [stepError, setStepError] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -200,10 +209,54 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
       setFormErrors(result.fieldErrors ?? {});
       return;
     }
+
+    if (result.status === "redirect") {
+      // La URL viene del servidor, pero se valida igual antes de navegar: sólo
+      // https y sólo dominios de Mercado Pago. Si no pasa, el turno queda en
+      // hold y vence solo; mejor un error que mandar al cliente a otro lado.
+      if (!isMercadoPagoCheckoutUrl(result.url)) {
+        setStepError("No pudimos abrir Mercado Pago. Probá de nuevo en un momento.");
+        return;
+      }
+      setCheckoutUrl(result.url);
+      setRedirectStalled(false);
+      setStep("redirecting");
+      window.location.assign(result.url);
+      return;
+    }
     setStep("done");
   }
 
+  // Mientras se "lleva" al cliente a Mercado Pago, dos cosas lo dejan varado:
+  // volver con el botón atrás (la página sale de la bfcache con el estado
+  // "redirecting" intacto) o que la navegación nunca arranque. En ambos casos
+  // se pasa a un estado con salida en vez de un cartel que no cambia.
+  useEffect(() => {
+    if (step !== "redirecting") return;
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setRedirectStalled(true);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    const timer = window.setTimeout(
+      () => setRedirectStalled(true),
+      REDIRECT_STALL_MS,
+    );
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      window.clearTimeout(timer);
+    };
+  }, [step]);
+
+  function retryPayment() {
+    // `checkoutUrl` sólo se guarda tras pasar `isMercadoPagoCheckoutUrl`.
+    if (!checkoutUrl || !isMercadoPagoCheckoutUrl(checkoutUrl)) return;
+    setRedirectStalled(false);
+    window.location.assign(checkoutUrl);
+  }
+
   function reset() {
+    setCheckoutUrl(null);
+    setRedirectStalled(false);
     setStep("service");
     setService(null);
     setStaff(null);
@@ -215,6 +268,16 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
     setCustomer(EMPTY_CUSTOMER);
     setFormErrors({});
     setStepError(null);
+  }
+
+  if (step === "redirecting") {
+    return (
+      <RedirectingToPayment
+        stalled={redirectStalled}
+        onRetry={retryPayment}
+        onChooseAnother={reset}
+      />
+    );
   }
 
   if (step === "done") {
@@ -341,6 +404,11 @@ export function BookingFlow({ services, timezone, actions }: BookingFlowProps) {
           onBack={() => setStep("schedule")}
         >
           <Summary service={service} staff={staff} slot={slot} date={date} />
+          {service?.payAtBooking && (
+            <p className="mt-3 rounded-xl border border-gold/30 bg-gold/10 px-3.5 py-2.5 text-sm font-medium text-foreground">
+              Se paga al reservar: {formatPrice(service.priceCents, service.currency)}
+            </p>
+          )}
           <div className="mt-5">
             <CustomerForm
               values={customer}
@@ -515,6 +583,52 @@ function LoadingRows() {
         />
       ))}
     </div>
+  );
+}
+
+function RedirectingToPayment({
+  stalled,
+  onRetry,
+  onChooseAnother,
+}: {
+  stalled: boolean;
+  onRetry: () => void;
+  onChooseAnother: () => void;
+}) {
+  return (
+    <Card className="p-8 text-center" role="status">
+      <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-gold/30 bg-gold/10 text-gold">
+        <Clock className="size-7" />
+      </div>
+      {stalled ? (
+        <>
+          <h2 className="mt-4 font-display text-xl font-semibold tracking-tight">
+            No pudimos abrir Mercado Pago
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Tu turno sigue reservado unos minutos. Probá de nuevo o elegí otro
+            horario.
+          </p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <Button type="button" onClick={onRetry}>
+              Volver a intentar el pago
+            </Button>
+            <Button type="button" variant="secondary" onClick={onChooseAnother}>
+              Elegir otro horario
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <h2 className="mt-4 font-display text-xl font-semibold tracking-tight">
+            Te llevamos a Mercado Pago para pagar
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Tu turno queda reservado unos minutos mientras pagás.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }
 

@@ -27,7 +27,7 @@ vi.mock("@/lib/supabase/server", () => ({
   },
 }));
 
-const { currentOwnerTenant } = await import("./ownership");
+const { currentOwnerTenant, canMarkRefunds } = await import("./ownership");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,5 +65,32 @@ describe("currentOwnerTenant", () => {
     sessionThrows = true;
     const result = await currentOwnerTenant();
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("canMarkRefunds", () => {
+  it.each([
+    ["owner", true],
+    ["admin", true],
+    ["staff", false],
+  ])("el rol %s => %s", async (role, expected) => {
+    membership = { data: { role }, error: null };
+    expect(await canMarkRefunds("t1")).toBe(expected);
+    // Por usuario y negocio: el rol se decide en código, no se confía en un filtro.
+    expect(eq).toHaveBeenCalledWith("user_id", "u1");
+    expect(eq).toHaveBeenCalledWith("tenant_id", "t1");
+  });
+
+  it("sin membresía, sin sesión o con la consulta rota: no (falla cerrado)", async () => {
+    membership = { data: null, error: null };
+    expect(await canMarkRefunds("t1")).toBe(false);
+    membership = { data: { role: "owner" }, error: { message: "x" } };
+    expect(await canMarkRefunds("t1")).toBe(false);
+    membership = { data: { role: "owner" }, error: null };
+    user = null;
+    expect(await canMarkRefunds("t1")).toBe(false);
+    user = { id: "u1" };
+    sessionThrows = true;
+    expect(await canMarkRefunds("t1")).toBe(false);
   });
 });
