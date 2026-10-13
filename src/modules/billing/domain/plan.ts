@@ -49,6 +49,35 @@ const PLAN_RANK: Record<PlanTier, number> = {
 };
 
 /**
+ * El plan mínimo que tiene un negocio durante una prueba gratis VIVA.
+ *
+ * Una prueba tiene que mostrar el producto, no una versión recortada: por eso
+ * mientras dura, el plan efectivo es al menos este. Hoy es `pro`; cuando
+ * WhatsApp y el resto de las funciones estén en producción se cambia a
+ * `premium`. Es una sola constante a propósito.
+ *
+ * Tiene un espejo en SQL: el literal de `public.tenant_effective_plan` (ver
+ * `20261003120002_trial_grants_pro.sql`). Se cambian JUNTOS, con una migración
+ * nueva que redefina la función.
+ */
+export const TRIAL_PLAN: PlanTier = "pro";
+
+/**
+ * ¿Puede el plan cobrarle online a sus clientes (Mercado Pago del negocio)?
+ *
+ * Desde `pro`. Se pregunta por el RANGO y no por la lista ["pro", "premium"]
+ * para que un plan nuevo por encima de pro herede el permiso sin tocar esto.
+ * Un plan fuera del catálogo da `false`: ante la duda, sin cobros.
+ *
+ * Tiene un espejo en SQL: el `< 'pro'` de `public.set_online_payments`. Se
+ * cambian JUNTOS. Esto sólo decide qué MOSTRAR; quien impide de verdad es la
+ * base.
+ */
+export function planAllowsOnlinePayments(plan: PlanTier): boolean {
+  return Object.hasOwn(PLAN_RANK, plan) && PLAN_RANK[plan] >= PLAN_RANK.pro;
+}
+
+/**
  * El mejor de dos planes.
  *
  * Existe para que un regalo nunca empeore lo comprado: ver `effectivePlan`.

@@ -1,3 +1,5 @@
+import type { ActionState } from "@/core/action";
+
 /**
  * Tipos del módulo de reservas (booking).
  *
@@ -18,7 +20,22 @@ export interface BookableService {
   currency: string;
   /** Cupos por franja: 1 = turno 1-a-1, >1 = clase/sesión grupal. */
   capacity: number;
+  /**
+   * Reservar este servicio exige pagarlo al reservar. Lo calcula la página
+   * pública en el servidor (negocio con cobro online Y servicio con precio);
+   * sólo informa a la UI, la que decide si hay hold es la base.
+   */
+  payAtBooking?: boolean;
 }
+
+/**
+ * Resultado de crear una reserva. Suma a `ActionState` la salida de la reserva
+ * pública con pago: `redirect` lleva la URL de Mercado Pago a la que el cliente
+ * tiene que ir a pagar (el turno queda en hold hasta que pague o venza).
+ */
+export type CreateBookingState =
+  | ActionState
+  | { status: "redirect"; url: string };
 
 /** Un profesional que puede atender un servicio (staff activo). */
 export interface BookableStaff {
@@ -61,6 +78,14 @@ export type BookingStatus =
   | "completed"
   | "no_show";
 
+/** Estado de cobro del turno (espeja el enum `booking_payment_status`). */
+export type PaymentStatus =
+  | "not_required"
+  | "awaiting"
+  | "paid"
+  | "refund_due"
+  | "refunded";
+
 /**
  * Un turno tal como lo muestra la agenda del panel: con nombre de cliente,
  * servicio y profesional ya resueltos, más el estado. Lo consume la vista
@@ -76,6 +101,11 @@ export interface AgendaBooking {
   startsAt: string;
   endsAt: string;
   status: BookingStatus;
+  /** Cobro online del turno; el panel pinta un badge y decide cómo se cancela. */
+  paymentStatus: PaymentStatus;
+  /** Precio congelado al reservar: lo que el cliente pagó si `paymentStatus` es 'paid'. */
+  priceCents: number;
+  currency: string;
 }
 
 /**

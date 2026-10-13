@@ -73,6 +73,27 @@ const serverEnvSchema = z.object({
   CRON_SECRET: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   NOTIFICATIONS_FROM_EMAIL: z.email().optional(),
+  /**
+   * Cobro a clientes con la cuenta de Mercado Pago de cada negocio (OAuth).
+   * LAS CUATRO SON OPCIONALES por lo mismo que las de correo: una obligatoria
+   * voltearía la app entera en un deploy que todavía no las tiene.
+   *
+   * Ausentes significa PAGOS ONLINE APAGADOS: el módulo `payments` devuelve
+   * `payments_not_configured` y el negocio sigue reservando sin cobrar. Van
+   * sin `z.string().min(1)` a propósito: una línea `VAR=` vacía, copiada de
+   * `.env.example`, llega como "" y con `min(1)` tiraría `serverEnv()` entero.
+   * El módulo trata "" y blancos como ausente.
+   *
+   * - `MERCADOPAGO_CLIENT_ID` / `_SECRET`: de la aplicación de la PLATAFORMA en
+   *   Mercado Pago (no de cada negocio). No son el access token de abajo.
+   * - `PAYMENTS_ENCRYPTION_KEY`: 32 bytes en base64 (AES-256-GCM) con que se
+   *   cifran los tokens de cada negocio en la base.
+   * - `PAYMENTS_STATE_SECRET`: secreto del HMAC del `state` del OAuth.
+   */
+  MERCADOPAGO_CLIENT_ID: z.string().optional(),
+  MERCADOPAGO_CLIENT_SECRET: z.string().optional(),
+  PAYMENTS_ENCRYPTION_KEY: z.string().optional(),
+  PAYMENTS_STATE_SECRET: z.string().optional(),
 });
 
 type ServerEnv = z.infer<typeof serverEnvSchema>;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { effectivePlan, type CourtesyView } from "./courtesy";
+import { TRIAL_PLAN } from "./plan";
 
 const NOW = new Date("2026-08-30T12:00:00Z");
 
@@ -122,5 +123,47 @@ describe("effectivePlan", () => {
         NOW,
       ),
     ).toBe("pro");
+  });
+});
+
+describe("effectivePlan con una prueba gratis", () => {
+  const vivo = { status: "trialing" as const, trialEndsAt: new Date("2026-09-10T00:00:00Z") };
+
+  it("una prueba viva sobre básico da TRIAL_PLAN", () => {
+    expect(effectivePlan(view({ plan: "basico", trial: vivo }), NOW)).toBe(
+      TRIAL_PLAN,
+    );
+  });
+
+  it("una prueba vencida deja el plan pagado", () => {
+    const vencida = { status: "trialing" as const, trialEndsAt: new Date("2026-08-01T00:00:00Z") };
+    expect(effectivePlan(view({ plan: "basico", trial: vencida }), NOW)).toBe(
+      "basico",
+    );
+  });
+
+  it("una suscripción activa no es una prueba aunque tenga fecha futura", () => {
+    const activa = { status: "active" as const, trialEndsAt: new Date("2026-09-10T00:00:00Z") };
+    expect(effectivePlan(view({ plan: "basico", trial: activa }), NOW)).toBe(
+      "basico",
+    );
+  });
+
+  it("la prueba nunca empeora lo que ya se tiene", () => {
+    expect(
+      effectivePlan(view({ plan: "premium", trial: vivo }), NOW),
+    ).toBe("premium");
+    expect(
+      effectivePlan(
+        view({ plan: "basico", planCourtesy: "premium", trial: vivo }),
+        NOW,
+      ),
+    ).toBe("premium");
+  });
+
+  it("sin dato de prueba, todo sigue igual", () => {
+    expect(effectivePlan(view({ plan: "basico", trial: null }), NOW)).toBe(
+      "basico",
+    );
   });
 });

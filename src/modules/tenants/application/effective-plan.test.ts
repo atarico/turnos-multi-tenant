@@ -102,3 +102,41 @@ describe("withEffectivePlan", () => {
     expect(tenant.plan_courtesy).toBe("pro");
   });
 });
+
+describe("withEffectivePlan con una prueba gratis", () => {
+  const viva = { status: "trialing" as const, trialEndsAt: new Date("2026-09-10T00:00:00Z") };
+  const vencida = { status: "trialing" as const, trialEndsAt: new Date("2026-08-01T00:00:00Z") };
+
+  it("una prueba viva sube el plan efectivo y deja intacto lo pagado", () => {
+    const tenant = withEffectivePlan(row({ plan: "basico" }), NOW, viva);
+
+    expect(tenant.plan).toBe("pro");
+    expect(tenant.paid_plan).toBe("basico");
+    expect(tenant.trial_active).toBe(true);
+  });
+
+  it("una prueba vencida no cambia nada", () => {
+    const tenant = withEffectivePlan(row({ plan: "basico" }), NOW, vencida);
+
+    expect(tenant.plan).toBe("basico");
+    expect(tenant.trial_active).toBe(false);
+  });
+
+  it("sin dato de prueba (falló la lectura) no hay prueba", () => {
+    const tenant = withEffectivePlan(row({ plan: "basico" }), NOW, null);
+
+    expect(tenant.plan).toBe("basico");
+    expect(tenant.trial_active).toBe(false);
+  });
+
+  /** Una cortesía mejor que la prueba gana, y eso NO es "estar de prueba". */
+  it("una cortesía premium durante la prueba sigue siendo premium", () => {
+    const tenant = withEffectivePlan(
+      row({ plan: "basico", plan_courtesy: "premium" }),
+      NOW,
+      viva,
+    );
+
+    expect(tenant.plan).toBe("premium");
+  });
+});

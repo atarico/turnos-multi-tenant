@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { listPublicServices } from "@/modules/booking/application/public-queries";
+import { tenantRequiresPayment } from "@/modules/payments/application/requires-payment";
 import { PublicBookingFlow } from "@/modules/booking/ui/public-booking-flow";
 import { PublicHeader } from "@/modules/booking/ui/public-header";
 import { getTenantBySlug } from "@/modules/tenants/application/queries";
@@ -62,7 +63,19 @@ export default async function PublicBookingPage({
   if (!tenant) notFound();
 
   const servicesResult = await listPublicServices(tenant.id);
-  const services = servicesResult.ok ? servicesResult.value : [];
+  const catalog = servicesResult.ok ? servicesResult.value : [];
+
+  // Sólo para avisar "se paga al reservar" ANTES de elegir: quien decide si hay
+  // cobro es la base al reservar. Un negocio cerrado no lo consulta (no hay
+  // nada que reservar) y un servicio gratis nunca crea hold, así que tampoco
+  // se anuncia un pago de $0.
+  const requiresPayment = tenant.takesBookings
+    ? await tenantRequiresPayment(tenant.id)
+    : false;
+  const services = catalog.map((service) => ({
+    ...service,
+    payAtBooking: requiresPayment && service.priceCents > 0,
+  }));
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-10">

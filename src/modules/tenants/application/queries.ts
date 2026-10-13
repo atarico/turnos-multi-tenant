@@ -1,6 +1,7 @@
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
-import { effectivePlan } from "@/modules/billing/domain/courtesy";
+import { effectivePlan, type TrialInfo } from "@/modules/billing/domain/courtesy";
+import { isInTrial } from "@/modules/billing/domain/subscription";
 
 import { toPublicTenant, type PublicTenantRow } from "../domain/tenant-mapper";
 import type { PublicTenant, Tenant } from "../domain/types";
@@ -33,11 +34,47 @@ export async function getCurrentTenant(): Promise<Tenant | null> {
   if (error || !data) return null;
   if (!data.tenants) return null;
 
-  return withEffectivePlan(data.tenants as unknown as TenantRow, new Date());
+  const tenantRow = data.tenants as unknown as TenantRow;
+  const now = new Date();
+  return withEffectivePlan(tenantRow, now, await readTrial(supabase, tenantRow.id, now));
+}
+
+/**
+ * La prueba viva del negocio, o `null`.
+ *
+ * Una lectura aparte y no un embed en la consulta de arriba: así un fallo acá
+ * no puede llevarse puesta la carga del negocio, que es lo que todo el panel
+ * necesita. Ante cualquier error, "sin prueba": el negocio queda con lo que
+ * paga, que es el lado seguro de equivocarse.
+ */
+async function readTrial(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  tenantId: string,
+  now: Date,
+): Promise<TrialInfo | null> {
+  try {
+    const { data, error } = await supabase
+      .from("subscriptions")
+      .select("status, trial_ends_at")
+      .eq("tenant_id", tenantId)
+      .eq("status", "trialing");
+    if (error || !data) return null;
+
+    for (const sub of data) {
+      const trial: TrialInfo = {
+        status: "trialing",
+        trialEndsAt: sub.trial_ends_at ? new Date(sub.trial_ends_at) : null,
+      };
+      if (isInTrial(trial, now)) return trial;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** La fila cruda de `tenants`: acá `plan` todavía es lo que se cobra. */
-type TenantRow = Omit<Tenant, "paid_plan">;
+type TenantRow = Omit<Tenant, "paid_plan" | "trial_active">;
 
 /**
  * Resuelve el plan efectivo ANTES de que la fila salga de la capa de datos.
@@ -50,7 +87,11 @@ type TenantRow = Omit<Tenant, "paid_plan">;
  *
  * Exportada para poder probarla sin levantar Supabase.
  */
-export function withEffectivePlan(row: TenantRow, now: Date): Tenant {
+export function withEffectivePlan(
+  row: TenantRow,
+  now: Date,
+  trial: TrialInfo | null = null,
+): Tenant {
   const plan = effectivePlan(
     {
       plan: row.plan,
@@ -58,11 +99,17 @@ export function withEffectivePlan(row: TenantRow, now: Date): Tenant {
       planCourtesyUntil: row.plan_courtesy_until
         ? new Date(row.plan_courtesy_until)
         : null,
+      trial,
     },
     now,
   );
 
-  return { ...row, plan, paid_plan: row.plan };
+  return {
+    ...row,
+    plan,
+    paid_plan: row.plan,
+    trial_active: trial !== null && isInTrial(trial, now),
+  };
 }
 
 /**

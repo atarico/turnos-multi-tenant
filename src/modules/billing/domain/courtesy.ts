@@ -1,6 +1,10 @@
 import type { PlanTier } from "@/modules/tenants/domain/types";
 
-import { betterPlan } from "./plan";
+import { betterPlan, TRIAL_PLAN } from "./plan";
+import { isInTrial, type Subscription } from "./subscription";
+
+/** Lo mínimo de la suscripción para saber si hay una prueba viva. */
+export type TrialInfo = Pick<Subscription, "status" | "trialEndsAt">;
 
 /** Lo mínimo que hace falta para responder por la cortesía. */
 export interface CourtesyView {
@@ -10,6 +14,13 @@ export interface CourtesyView {
   planCourtesy: PlanTier | null;
   /** Hasta cuándo dura el regalo. `null` = hasta que lo saquen. */
   planCourtesyUntil: Date | null;
+  /**
+   * La suscripción, para detectar una prueba gratis viva. Opcional: `null` o
+   * ausente = "no hay prueba", que es también lo que se asume si no se pudo
+   * leer. Equivocarse hacia "sin prueba" deja al negocio con lo que paga, nunca
+   * con algo que no le corresponde.
+   */
+  trial?: TrialInfo | null;
 }
 
 /**
@@ -42,6 +53,20 @@ export interface CourtesyView {
  * trabajar.
  */
 export function effectivePlan(tenant: CourtesyView, now: Date): PlanTier {
+  const withCourtesy = planWithCourtesy(tenant, now);
+
+  // Una prueba viva sube el piso a `TRIAL_PLAN`, y como todo lo demás acá es
+  // "la mejor de las dos": jamás empeora lo pagado ni una cortesía mayor.
+  // Vencida la prueba sin pago, esto no aporta nada y el negocio queda como
+  // hoy (sin turnos nuevos hasta que pague algún plan: eso lo decide
+  // `takesNewBookings`, no el plan).
+  if (tenant.trial && isInTrial(tenant.trial, now)) {
+    return betterPlan(withCourtesy, TRIAL_PLAN);
+  }
+  return withCourtesy;
+}
+
+function planWithCourtesy(tenant: CourtesyView, now: Date): PlanTier {
   if (!tenant.planCourtesy) return tenant.plan;
 
   const expired =

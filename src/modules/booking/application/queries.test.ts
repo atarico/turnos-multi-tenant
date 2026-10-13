@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countBookingsOnDay,
   getBooking,
+  getBookingLoad,
   listBookingsToClose,
   listUpcomingBookings,
   sumMonthlyRevenue,
@@ -49,6 +50,8 @@ interface Builder {
   in: ReturnType<typeof vi.fn>;
   gte: ReturnType<typeof vi.fn>;
   lt: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
+  gt: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
   then: (
@@ -62,7 +65,7 @@ interface Builder {
 
 function makeBuilder(): Builder {
   const builder = {} as Builder;
-  for (const method of ["select", "eq", "in", "gte", "lt", "order"] as const) {
+  for (const method of ["select", "eq", "in", "gte", "lt", "gt", "or", "order"] as const) {
     builder[method] = vi.fn(() => builder);
   }
   builder.maybeSingle = vi.fn(async () => ({ data: fromData, error: fromError }));
@@ -332,6 +335,36 @@ describe("listUpcomingBookings", () => {
     expect(result.ok && result.value[0]?.staffName).toBe("Juan");
   });
 
+  it("maps the payment fields the agenda badge and the paid-cancel step need", async () => {
+    fromData = [
+      {
+        id: "b1",
+        customer_name: "Ana",
+        customer_phone: null,
+        starts_at: "2026-09-01T10:00:00Z",
+        ends_at: "2026-09-01T10:30:00Z",
+        status: "confirmed",
+        service_name: "Corte",
+        staff_name: "Juan",
+        payment_status: "paid",
+        price_cents: 150000,
+        currency: "ARS",
+      },
+    ];
+
+    const result = await listUpcomingBookings("tenant-1");
+
+    expect(result.ok && result.value[0]).toMatchObject({
+      paymentStatus: "paid",
+      priceCents: 150000,
+      currency: "ARS",
+    });
+    const select = lastSelect();
+    expect(select).toContain("payment_status");
+    expect(select).toContain("price_cents");
+    expect(select).toContain("currency");
+  });
+
   it("selects the snapshot columns instead of the live services/staff joins", async () => {
     await listUpcomingBookings("tenant-1");
 
@@ -443,6 +476,29 @@ describe("la agenda del panel y la lista de cierre parten los turnos vivos", () 
 });
 
 describe("getBooking", () => {
+  it("reads payment_status so a cancel of a paid booking can be routed", async () => {
+    fromData = {
+      id: "b1",
+      customer_name: "Ana",
+      customer_phone: null,
+      starts_at: "2026-09-01T10:00:00Z",
+      ends_at: "2026-09-01T10:30:00Z",
+      status: "confirmed",
+      service_name: "Corte",
+      staff_name: "Juan",
+      payment_status: "paid",
+      price_cents: 5000,
+      currency: "ARS",
+      service_id: "s1",
+      staff_id: "p1",
+    };
+
+    const result = await getBooking("tenant-1", "b1");
+
+    expect(result.ok && result.value.paymentStatus).toBe("paid");
+    expect(lastSelect()).toContain("payment_status");
+  });
+
   it("returns null serviceId/staffId for a booking unlinked from a deleted parent", async () => {
     fromData = {
       id: "b1",
@@ -486,5 +542,94 @@ describe("getBooking", () => {
     expect(result.ok).toBe(true);
     expect(result.ok && result.value.serviceId).toBe("service-1");
     expect(result.ok && result.value.staffId).toBe("staff-1");
+  });
+});
+
+/**
+ * La carga que ve el panel al ofrecer franjas. Tiene que coincidir con la de la
+ * base (`create_booking`, `public_booking_load`): un hold de pago VENCIDO no
+ * ocupa cupo, y si el panel lo contara ofrecería menos franjas de las que la
+ * base realmente deja reservar.
+ */
+/**
+ * Un hold de pago VENCIDO (pending + awaiting con `payment_expires_at <= now`)
+ * no es un turno vivo: no ocupa cupo, y el cron lo cancela recién una vez por
+ * día. Mientras tanto la agenda no puede mostrarlo como "Pendiente". El filtro
+ * va en la base —no en JS— para que el conteo de `head: true` y el tope de
+ * filas de PostgREST sigan siendo correctos.
+ */
+describe("holds de pago vencidos en la agenda", () => {
+  const AT = new Date("2026-10-05T12:00:00.000Z");
+  const orFilter = () => lastBuilder().or.mock.calls[0]?.[0] as string | undefined;
+  const EXPECTED = `payment_status.neq.awaiting,payment_expires_at.gt."${AT.toISOString()}"`;
+
+  it("listUpcomingBookings excludes expired holds using the injected instant", async () => {
+    await listUpcomingBookings("tenant-1", AT);
+    expect(orFilter()).toBe(EXPECTED);
+  });
+
+  it("listBookingsToClose excludes expired holds using the injected instant", async () => {
+    await listBookingsToClose("tenant-1", AT);
+    expect(orFilter()).toBe(EXPECTED);
+  });
+
+  it("countBookingsOnDay excludes expired holds using the injected instant", async () => {
+    fromCount = 0;
+    await countBookingsOnDay("tenant-1", "2026-10-05", AR, AT);
+    expect(orFilter()).toBe(EXPECTED);
+  });
+
+  it("keeps the rest of the filters untouched", async () => {
+    await listUpcomingBookings("tenant-1", AT);
+    expect(filterArg("eq")).toBe("tenant-1");
+    expect(filterColumn("gte")).toBe("ends_at");
+  });
+});
+
+describe("getBookingLoad", () => {
+  const NOW = new Date("2026-10-05T12:00:00.000Z");
+  const row = (over: Record<string, unknown>) => ({
+    service_id: "svc-1",
+    starts_at: "2026-10-06T10:00:00.000Z",
+    ends_at: "2026-10-06T10:30:00.000Z",
+    payment_status: "not_required",
+    payment_expires_at: null,
+    ...over,
+  });
+
+  it("ignores an awaiting hold whose expiry has passed", async () => {
+    fromData = [
+      row({ payment_status: "awaiting", payment_expires_at: "2026-10-05T11:59:00.000Z" }),
+    ];
+    const result = await getBookingLoad("staff-1", "a", "b", NOW);
+    expect(result.ok && result.value).toEqual([]);
+  });
+
+  it("ignores a hold that expires exactly now", async () => {
+    fromData = [
+      row({ payment_status: "awaiting", payment_expires_at: NOW.toISOString() }),
+    ];
+    const result = await getBookingLoad("staff-1", "a", "b", NOW);
+    expect(result.ok && result.value).toEqual([]);
+  });
+
+  it("keeps an awaiting hold that has not expired yet", async () => {
+    fromData = [
+      row({ payment_status: "awaiting", payment_expires_at: "2026-10-05T12:10:00.000Z" }),
+    ];
+    const result = await getBookingLoad("staff-1", "a", "b", NOW);
+    expect(result.ok && result.value).toHaveLength(1);
+  });
+
+  it("keeps bookings that do not wait for a payment", async () => {
+    fromData = [row({}), row({ payment_status: "paid" })];
+    const result = await getBookingLoad("staff-1", "a", "b", NOW);
+    expect(result.ok && result.value).toHaveLength(2);
+  });
+
+  it("selects the payment columns it filters on", async () => {
+    await getBookingLoad("staff-1", "a", "b", NOW);
+    expect(lastSelect()).toContain("payment_status");
+    expect(lastSelect()).toContain("payment_expires_at");
   });
 });
