@@ -50,3 +50,32 @@ export async function currentOwnerTenant(): Promise<Result<{ tenantId: string }>
 
   return ok({ tenantId: tenant.id });
 }
+
+/**
+ * ¿La sesión actual es dueña o ADMIN de este negocio?
+ *
+ * Marcar una devolución como hecha cierra plata, así que es de `owner` o
+ * `admin` (un miembro `staff` no). Sólo decide si se OFRECE el botón: la base
+ * lo vuelve a exigir dentro de `mark_payment_refunded`. Falla CERRADO.
+ */
+export async function canMarkRefunds(tenantId: string): Promise<boolean> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return false;
+
+    const { data, error } = await supabase
+      .from("memberships")
+      .select("role")
+      .eq("user_id", user.id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (error || !data) return false;
+    const role = (data as { role: string }).role;
+    return role === "owner" || role === "admin";
+  } catch {
+    return false;
+  }
+}

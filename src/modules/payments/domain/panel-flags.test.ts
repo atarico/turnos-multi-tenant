@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyToggleError, parsePaymentsFlag, PAYMENTS_FLAGS } from "./panel-flags";
+import {
+  classifyRefundError,
+  classifyToggleError,
+  parsePaymentsFlag,
+  PAYMENTS_FLAGS,
+} from "./panel-flags";
 
 describe("parsePaymentsFlag", () => {
   it("reconoce cada bandera fija", () => {
@@ -39,5 +44,31 @@ describe("classifyToggleError", () => {
   it("cualquier otra cosa es un fallo genérico", () => {
     expect(classifyToggleError({ code: "XX000", message: "boom" })).toBe("fallo");
     expect(classifyToggleError({})).toBe("fallo");
+  });
+});
+
+describe("classifyRefundError", () => {
+  it("42501 es que no es dueño ni admin", () => {
+    expect(classifyRefundError({ code: "42501", message: "x" })).toBe("devolucion-sin-permiso");
+  });
+
+  it("un pago que no está pendiente de devolución tiene su propia bandera", () => {
+    expect(
+      classifyRefundError({
+        code: "P0001",
+        message: "Ese pago no está pendiente de devolución",
+      }),
+    ).toBe("devolucion-no-pendiente");
+  });
+
+  it("cualquier otra cosa es un fallo genérico", () => {
+    expect(classifyRefundError({ code: "XX000", message: "boom" })).toBe("fallo");
+    expect(classifyRefundError({})).toBe("fallo");
+  });
+
+  it("las banderas de devolución existen y dicen la verdad", () => {
+    expect(PAYMENTS_FLAGS.devuelto.tone).toBe("ok");
+    expect(PAYMENTS_FLAGS["devolucion-sin-permiso"].tone).toBe("error");
+    expect(PAYMENTS_FLAGS["devolucion-no-pendiente"].tone).toBe("error");
   });
 });

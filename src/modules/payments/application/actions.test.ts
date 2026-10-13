@@ -35,7 +35,8 @@ vi.mock("@/lib/supabase/server", () => ({
   },
 }));
 
-const { toggleOnlinePaymentsAction, disconnectMpAction } = await import("./actions");
+const { toggleOnlinePaymentsAction, disconnectMpAction, markPaymentRefundedAction } =
+  await import("./actions");
 
 const form = (enabled?: string) => {
   const data = new FormData();
@@ -140,5 +141,50 @@ describe("disconnectMpAction", () => {
   it("si el borrado falla, vuelve con fallo", async () => {
     deleteTenantMpAccount.mockResolvedValue({ ok: false, error: { code: "account_delete_failed", message: "x" } });
     expect(await run(() => disconnectMpAction())).toBe("/panel/pagos?mp=fallo");
+  });
+});
+
+describe("markPaymentRefundedAction", () => {
+  const refundForm = (id?: string) => {
+    const data = new FormData();
+    if (id !== undefined) data.set("id", id);
+    return data;
+  };
+
+  it("llama al RPC con la sesión y vuelve con la bandera de éxito", async () => {
+    const to = await run(() => markPaymentRefundedAction(refundForm("p1")));
+    expect(rpc).toHaveBeenCalledWith("mark_payment_refunded", { p_booking_payment_id: "p1" });
+    expect(to).toBe("/panel/pagos?mp=devuelto");
+    expect(revalidatePath).toHaveBeenCalledWith("/panel/pagos");
+    expect(revalidatePath).toHaveBeenCalledWith("/panel");
+  });
+
+  it.each([
+    [{ code: "42501", message: "x" }, "devolucion-sin-permiso"],
+    [{ code: "P0001", message: "Ese pago no está pendiente de devolución" }, "devolucion-no-pendiente"],
+    [{ code: "XX000", message: "boom" }, "fallo"],
+  ])("traduce el error %j a la bandera %s", async (error, flag) => {
+    rpcResult = { error };
+    const to = await run(() => markPaymentRefundedAction(refundForm("p1")));
+    expect(to).toBe(`/panel/pagos?mp=${flag}`);
+  });
+
+  it("sin id no toca la base", async () => {
+    const to = await run(() => markPaymentRefundedAction(refundForm("  ")));
+    expect(rpc).not.toHaveBeenCalled();
+    expect(to).toBe("/panel/pagos?mp=fallo");
+  });
+
+  it("sin negocio manda a ingresar", async () => {
+    tenant = null;
+    const to = await run(() => markPaymentRefundedAction(refundForm("p1")));
+    expect(rpc).not.toHaveBeenCalled();
+    expect(to).toBe("/ingresar");
+  });
+
+  it("si el cliente de sesión tira, vuelve con fallo", async () => {
+    sessionThrows = true;
+    const to = await run(() => markPaymentRefundedAction(refundForm("p1")));
+    expect(to).toBe("/panel/pagos?mp=fallo");
   });
 });

@@ -33,3 +33,12 @@ export function returnState(facts: ReturnBookingFacts, now: Date): ReturnState {
 
   return "other";
 }
+
+/**
+ * Cuánto espera la página de retorno a Mercado Pago antes de rendir igual.
+ *
+ * La lee una persona mirando una pantalla: si Mercado Pago tarda, se muestra
+ * "estamos confirmando tu pago" y el webhook termina el trabajo. Es el tope de
+ * TODA la sincronización, no sólo de la búsqueda.
+ */
+export const RETURN_SYNC_BUDGET_MS = 3000;

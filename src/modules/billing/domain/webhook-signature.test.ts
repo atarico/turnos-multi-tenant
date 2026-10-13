@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { isValidWebhookSignature } from "./webhook-signature";
+import { isValidWebhookSignature, verifyWebhookSignature } from "./webhook-signature";
 
 /**
  * Tests de la verificación de firma del webhook de Mercado Pago.
@@ -371,5 +371,58 @@ describe("isValidWebhookSignature", () => {
     expect(
       isValidWebhookSignature({ ...valid, signatureHeader: sign({ ts }) }),
     ).toBe(false);
+  });
+});
+
+/**
+ * `verifyWebhookSignature` separa "no es de Mercado Pago" (`invalid`) de "es de
+ * ellos pero llegó tarde" (`stale`). El webhook de pagos de los negocios
+ * necesita la diferencia: Mercado Pago reintenta hasta 15 minutos contra una
+ * ventana de 5, y esos reintentos legítimos no se pueden tratar como falsos.
+ */
+describe("verifyWebhookSignature", () => {
+  it("valid: firma legítima y reciente", () => {
+    expect(verifyWebhookSignature(valid)).toBe("valid");
+  });
+
+  it("stale: el HMAC verifica pero la firma está vencida", () => {
+    const now = new Date(SIGNED_AT_MS + WINDOW_MS + MINUTE);
+    expect(verifyWebhookSignature({ ...valid, now })).toBe("stale");
+  });
+
+  it("stale: el HMAC verifica pero el reloj está adelantado más de la ventana", () => {
+    const now = new Date(SIGNED_AT_MS - WINDOW_MS - MINUTE);
+    expect(verifyWebhookSignature({ ...valid, now })).toBe("stale");
+  });
+
+  it("invalid: otro secreto, aunque sea reciente", () => {
+    const signatureHeader = sign({ secret: "no-es-el-secreto" });
+    expect(verifyWebhookSignature({ ...valid, signatureHeader })).toBe("invalid");
+  });
+
+  it("invalid: otro secreto Y vencida (no se confunde con stale)", () => {
+    const signatureHeader = sign({ secret: "no-es-el-secreto" });
+    const now = new Date(SIGNED_AT_MS + 2 * WINDOW_MS);
+    expect(verifyWebhookSignature({ ...valid, signatureHeader, now })).toBe("invalid");
+  });
+
+  it("invalid: header ausente, mal formado o secreto vacío", () => {
+    expect(verifyWebhookSignature({ ...valid, signatureHeader: null })).toBe("invalid");
+    expect(verifyWebhookSignature({ ...valid, signatureHeader: "basura" })).toBe("invalid");
+    expect(verifyWebhookSignature({ ...valid, secret: "" })).toBe("invalid");
+  });
+
+  it("invalid: un ts que no es un instante, aunque el HMAC coincida", () => {
+    const signatureHeader = sign({ ts: "12abc" });
+    expect(verifyWebhookSignature({ ...valid, signatureHeader })).toBe("invalid");
+  });
+
+  it("invalid: el data.id cambiado invalida la firma", () => {
+    expect(verifyWebhookSignature({ ...valid, dataId: "999" })).toBe("invalid");
+  });
+
+  it("isValidWebhookSignature sigue siendo falso ante una firma stale", () => {
+    const now = new Date(SIGNED_AT_MS + WINDOW_MS + MINUTE);
+    expect(isValidWebhookSignature({ ...valid, now })).toBe(false);
   });
 });

@@ -70,6 +70,64 @@ export async function saveTenantMpAccount(
 }
 
 /**
+ * Guarda los tokens RENOVADOS de una cuenta ya conectada (la renovación del
+ * cron). A diferencia de `saveTenantMpAccount`, es un UPDATE y no un upsert:
+ *
+ * - toca sólo los dos cifrados, el vencimiento y `updated_at`; `connected_at`,
+ *   `mp_user_id` y `public_key` quedan como estaban;
+ * - lleva `status = 'connected'` en el WHERE, así que nunca resucita una fila
+ *   que se rompió o se borró entre la lectura del refresh token y este guardado.
+ *
+ * Cero filas actualizadas es `account_not_connected`, distinto de un error de
+ * escritura: quien llama no debe reintentar ni marcar la cuenta rota, porque
+ * ya no hay nada que guardar.
+ */
+export async function rotateTenantMpTokens(
+  tenantId: string,
+  tokens: MpTokens,
+  now: Date = new Date(),
+): Promise<Result<void>> {
+  const key = encryptionKey();
+  if (!key.ok) return key;
+
+  const access = encryptToken(tokens.accessToken, key.value);
+  if (!access.ok) return access;
+  const refresh = encryptToken(tokens.refreshToken, key.value);
+  if (!refresh.ok) return refresh;
+
+  try {
+    const { data, error } = await createAdminClient()
+      .from(TABLE)
+      .update({
+        access_token_ciphertext: access.value,
+        refresh_token_ciphertext: refresh.value,
+        access_token_expires_at: tokens.expiresAt.toISOString(),
+        updated_at: now.toISOString(),
+      })
+      .eq("tenant_id", tenantId)
+      .eq("status", "connected")
+      .select("tenant_id");
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      return err(
+        appError(
+          "account_not_connected",
+          "La cuenta ya no está conectada: no hay nada que renovar.",
+        ),
+      );
+    }
+  } catch {
+    return err(
+      appError(
+        "account_save_failed",
+        "No pudimos guardar la conexión con Mercado Pago. Intentá de nuevo.",
+      ),
+    );
+  }
+  return ok(undefined);
+}
+
+/**
  * Access token descifrado del negocio.
  *
  * Errores tipados para que quien llama decida: `not_connected` (nunca
@@ -78,18 +136,35 @@ export async function saveTenantMpAccount(
  * `payments_not_configured`.
  */
 export async function loadTenantAccessToken(tenantId: string): Promise<Result<string>> {
+  return loadDecryptedToken(tenantId, "access_token_ciphertext");
+}
+
+/**
+ * Refresh token descifrado del negocio. Sólo lo usa la renovación del cron
+ * (`refresh-tenant-tokens.ts`): ningún flujo de cara al cliente necesita
+ * leerlo. Mismos errores tipados que `loadTenantAccessToken`.
+ */
+export async function loadTenantRefreshToken(tenantId: string): Promise<Result<string>> {
+  return loadDecryptedToken(tenantId, "refresh_token_ciphertext");
+}
+
+async function loadDecryptedToken(
+  tenantId: string,
+  column: "access_token_ciphertext" | "refresh_token_ciphertext",
+): Promise<Result<string>> {
   const key = encryptionKey();
   if (!key.ok) return key;
 
-  let row: { status: string; access_token_ciphertext: string } | null;
+  // Se pide SÓLO la columna que se va a usar: el otro token no sale de la base.
+  let row: Record<string, string> | null;
   try {
     const { data, error } = await createAdminClient()
       .from(TABLE)
-      .select("status, access_token_ciphertext")
+      .select(`status, ${column}`)
       .eq("tenant_id", tenantId)
       .maybeSingle();
     if (error) throw error;
-    row = data as typeof row;
+    row = data as unknown as typeof row;
   } catch {
     return err(
       appError(
@@ -110,7 +185,7 @@ export async function loadTenantAccessToken(tenantId: string): Promise<Result<st
 
   // Cualquier falla de descifrado (sobre ilegible, versión vieja, clave que
   // no coincide, dato alterado) es la misma para quien llama: reconectar.
-  const decrypted = decryptToken(row.access_token_ciphertext, key.value);
+  const decrypted = decryptToken(row[column]!, key.value);
   if (decrypted.ok) return decrypted;
   return err(
     appError(

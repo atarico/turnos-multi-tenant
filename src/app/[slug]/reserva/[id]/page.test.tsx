@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { err, ok } from "@/core/result";
+import { RETURN_SYNC_BUDGET_MS } from "@/modules/payments/domain/return-state";
 import { throwingNotFoundSpy } from "@/test-support/next-navigation";
 
 /**
@@ -16,6 +17,9 @@ vi.mock("next/navigation", () => ({ notFound: () => notFound() }));
 vi.mock("@/modules/tenants/application/queries", () => ({ getTenantBySlug: vi.fn() }));
 vi.mock("@/modules/payments/application/booking-return", () => ({
   getBookingForReturn: vi.fn(),
+}));
+vi.mock("@/modules/payments/application/sync-booking-payment", () => ({
+  syncBookingPaymentFromReturn: vi.fn(),
 }));
 
 const TENANT = {
@@ -167,6 +171,121 @@ describe("página de retorno /[slug]/reserva/[id]", { timeout: 15000 }, () => {
     expect(html).not.toContain("script");
     // Y con 'approved' en la URL, igual sigue esperando: manda la base.
     expect(screen.getByText(/Estamos confirmando tu pago/)).toBeInTheDocument();
+  });
+});
+
+describe("sincronización al volver del checkout", { timeout: 15000 }, () => {
+  async function syncMock() {
+    const { syncBookingPaymentFromReturn } = await import(
+      "@/modules/payments/application/sync-booking-payment"
+    );
+    return vi.mocked(syncBookingPaymentFromReturn);
+  }
+
+  it("esperando el pago: sincroniza UNA vez con el negocio del slug y el id de la URL", async () => {
+    const sync = await syncMock();
+    sync.mockResolvedValue(ok("applied"));
+    await arrange(ok(booking()));
+
+    await renderPage();
+
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith("t1", ID);
+  });
+
+  it("después de sincronizar vuelve a leer el turno y muestra lo que dice la base", async () => {
+    const sync = await syncMock();
+    sync.mockResolvedValue(ok("applied"));
+    const { getBookingForReturn } = await arrange(ok(booking()));
+    getBookingForReturn
+      .mockResolvedValueOnce(ok(booking()))
+      .mockResolvedValueOnce(
+        ok(booking({ status: "confirmed", paymentStatus: "paid", paymentExpiresAt: null })),
+      );
+
+    await renderPage();
+
+    expect(getBookingForReturn).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("¡Turno confirmado!")).toBeInTheDocument();
+    expect(screen.queryByText(/Estamos confirmando/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["confirmado", { status: "confirmed", paymentStatus: "paid", paymentExpiresAt: null }],
+    ["cancelado", { status: "cancelled" }],
+    ["hold vencido", { paymentExpiresAt: new Date(Date.now() - 60_000).toISOString() }],
+    ["sin pago", { status: "confirmed", paymentStatus: "not_required", paymentExpiresAt: null }],
+  ])("%s: NO sincroniza ni vuelve a leer", async (_name, overrides) => {
+    const sync = await syncMock();
+    const { getBookingForReturn } = await arrange(ok(booking(overrides)));
+
+    await renderPage();
+
+    expect(sync).not.toHaveBeenCalled();
+    expect(getBookingForReturn).toHaveBeenCalledTimes(1);
+  });
+
+  it("si la sincronización devuelve un error, igual renderiza el estado de la base", async () => {
+    const sync = await syncMock();
+    sync.mockResolvedValue(err({ code: "mp_unreachable", message: "x" }));
+    await arrange(ok(booking()));
+
+    await renderPage();
+
+    expect(screen.getByText(/Estamos confirmando tu pago/)).toBeInTheDocument();
+  });
+
+  it("si Mercado Pago tarda, la página rinde 'confirmando' al agotar el presupuesto y no se cuelga", async () => {
+    const sync = await syncMock();
+    sync.mockReturnValue(new Promise(() => {}));
+    const { getBookingForReturn } = await arrange(ok(booking()));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const rendering = renderPage();
+      await vi.advanceTimersByTimeAsync(RETURN_SYNC_BUDGET_MS);
+      await rendering;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.getByText(/Estamos confirmando tu pago/)).toBeInTheDocument();
+    // No hubo segunda lectura: la sincronización no terminó.
+    expect(getBookingForReturn).toHaveBeenCalledTimes(1);
+  });
+
+  it("si la sincronización TIRA, igual renderiza (falla en silencio)", async () => {
+    const sync = await syncMock();
+    sync.mockRejectedValue(new Error("boom"));
+    await arrange(ok(booking()));
+
+    await renderPage();
+
+    expect(screen.getByText(/Estamos confirmando tu pago/)).toBeInTheDocument();
+  });
+
+  it("si la segunda lectura falla, se queda con la primera en vez de mostrar un error", async () => {
+    const sync = await syncMock();
+    sync.mockResolvedValue(ok("applied"));
+    const { getBookingForReturn } = await arrange(ok(booking()));
+    getBookingForReturn
+      .mockResolvedValueOnce(ok(booking()))
+      .mockResolvedValueOnce(err({ code: "booking_load_failed", message: "x" }));
+
+    await renderPage();
+
+    expect(screen.getByText(/Estamos confirmando tu pago/)).toBeInTheDocument();
+    expect(screen.queryByText(/No pudimos consultar/)).not.toBeInTheDocument();
+  });
+
+  it("nunca le pasa a la sincronización lo que traiga la URL (query params de MP)", async () => {
+    const sync = await syncMock();
+    sync.mockResolvedValue(ok("ignored"));
+    await arrange(ok(booking()));
+
+    await renderPage({ searchParams: Promise.resolve({ payment_id: "999", status: "approved" }) });
+
+    expect(JSON.stringify(sync.mock.calls)).not.toContain("999");
+    expect(sync.mock.calls[0]).toEqual(["t1", ID]);
   });
 });
 

@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { appError, err, ok, type Result } from "@/core/result";
+
+import { notifyToken } from "../domain/notify-token";
 import { createCheckoutPreference } from "./checkout-preference";
+
+const stateSecret = vi.fn<() => Result<string>>();
+vi.mock("./config", () => ({ stateSecret: () => stateSecret() }));
 
 const response = (status: number, body: unknown) =>
   ({
@@ -35,6 +41,7 @@ function sent() {
 }
 
 beforeEach(() => {
+  stateSecret.mockReturnValue(ok("secreto-de-estado"));
   fetchMock = vi.fn(async () => response(201, okBody));
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -73,7 +80,7 @@ describe("createCheckoutPreference", () => {
         { title: "Corte de pelo", quantity: 1, unit_price: 1500.5, currency_id: "ARS" },
       ],
       external_reference: "b-1",
-      notification_url: "https://app.test/api/webhooks/mercadopago/payments?tenant=t-1",
+      notification_url: `https://app.test/api/webhooks/mercadopago/payments?tenant=t-1&k=${notifyToken("secreto-de-estado", "t-1")}`,
       back_urls: {
         success: "https://app.test/negocio/reserva/b-1",
         failure: "https://app.test/negocio/reserva/b-1",
@@ -150,5 +157,22 @@ describe("createCheckoutPreference", () => {
     fetchMock.mockResolvedValue(response(401, { message: "token TENANT-TOKEN invalid" }));
     const result = await createCheckoutPreference("TENANT-TOKEN", input);
     expect(JSON.stringify(result)).not.toContain("TENANT-TOKEN");
+  });
+
+  it("el token k de la notificación ata la URL al negocio (HMAC con PAYMENTS_STATE_SECRET)", async () => {
+    await createCheckoutPreference("T", input);
+
+    const url = new URL(sent().body.notification_url);
+    expect(url.searchParams.get("tenant")).toBe("t-1");
+    expect(url.searchParams.get("k")).toBe(notifyToken("secreto-de-estado", "t-1"));
+  });
+
+  it("sin PAYMENTS_STATE_SECRET no crea la preferencia y no sale a la red", async () => {
+    stateSecret.mockReturnValue(err(appError("payments_not_configured", "x")));
+
+    const result = await createCheckoutPreference("T", input);
+
+    expect(result.ok === false && result.error.code).toBe("payments_not_configured");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
