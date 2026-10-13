@@ -30,9 +30,9 @@ vi.mock("@/lib/env", () => ({
   serverEnv: () => ({ BOOKING_IP_SALT: SALT }),
 }));
 
-const rpc = vi.fn<(...args: unknown[]) => Promise<{ error: { message: string } | null }>>(
-  async () => ({ error: null }),
-);
+const rpc = vi.fn<
+  (...args: unknown[]) => Promise<{ data?: unknown; error: { message: string } | null }>
+>(async () => ({ error: null }));
 const createAdminClient = vi.fn(() => ({ rpc }));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => createAdminClient(),
@@ -58,6 +58,15 @@ const getTenantBySlug = vi.fn(async (): Promise<unknown> => ({
 }));
 vi.mock("@/modules/tenants/application/queries", () => ({
   getTenantBySlug: () => getTenantBySlug(),
+}));
+
+/**
+ * El arranque del pago tiene sus propios tests (`start-booking-payment.test`):
+ * acá sólo se fija cómo la action TRADUCE cada desenlace.
+ */
+const startBookingPayment = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+vi.mock("@/modules/payments/application/start-booking-payment", () => ({
+  startBookingPayment: (...args: unknown[]) => startBookingPayment(...args),
 }));
 
 // Las otras actions del archivo importan las queries públicas; se mockean para
@@ -103,6 +112,7 @@ beforeEach(() => {
     timezone: "America/Argentina/Buenos_Aires",
   });
   notifyBookingCreated.mockResolvedValue("sent");
+  startBookingPayment.mockReset();
 });
 
 describe("createPublicBookingAction", () => {
@@ -305,5 +315,105 @@ describe("createPublicBookingAction", () => {
     });
     expect(createAdminClient).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  describe("reserva con pago (hold)", () => {
+    const INIT_POINT = "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=p1";
+    const heldRow = {
+      id: "b-1",
+      tenant_id: "tenant-1",
+      service_name: "Corte",
+      price_cents: 150000,
+      currency: "ARS",
+      customer_name: "Ana",
+      customer_email: "ana@correo.com",
+      payment_status: "awaiting",
+      payment_expires_at: "2026-09-01T13:15:00.000Z",
+    };
+
+    beforeEach(() => {
+      rpc.mockResolvedValue({ data: heldRow, error: null });
+    });
+
+    it("un hold arranca el pago y devuelve la URL para redirigir", async () => {
+      startBookingPayment.mockResolvedValue({
+        ok: true,
+        value: { kind: "redirect", url: INIT_POINT },
+      });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result).toEqual({ status: "redirect", url: INIT_POINT });
+      expect(startBookingPayment).toHaveBeenCalledWith(heldRow, { slug: "negocio" });
+    });
+
+    it("un turno que todavía no está confirmado NO manda la confirmación por mail", async () => {
+      startBookingPayment.mockResolvedValue({
+        ok: true,
+        value: { kind: "redirect", url: INIT_POINT },
+      });
+
+      await createPublicBookingAction("negocio", validInput());
+
+      expect(notifyBookingCreated).not.toHaveBeenCalled();
+    });
+
+    it("si la cuenta falló y el turno se confirmó sin pago, avisa y manda la confirmación", async () => {
+      startBookingPayment.mockResolvedValue({
+        ok: true,
+        value: { kind: "confirmed_without_payment" },
+      });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result).toEqual({ status: "success", message: "Reserva confirmada." });
+      expect(notifyBookingCreated).toHaveBeenCalledOnce();
+    });
+
+    it("si no se pudo iniciar el pago devuelve el error de reintento", async () => {
+      startBookingPayment.mockResolvedValue({
+        ok: false,
+        error: { code: "payment_start_failed", message: "No pudimos iniciar el pago, probá de nuevo." },
+      });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result).toEqual({
+        status: "error",
+        message: "No pudimos iniciar el pago, probá de nuevo.",
+      });
+      expect(notifyBookingCreated).not.toHaveBeenCalled();
+    });
+
+    it("una reserva sin pago exigido se comporta como siempre", async () => {
+      rpc.mockResolvedValue({
+        data: { ...heldRow, payment_status: "not_required", payment_expires_at: null },
+        error: null,
+      });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result).toEqual({ status: "success", message: "Reserva confirmada." });
+      expect(startBookingPayment).not.toHaveBeenCalled();
+      expect(notifyBookingCreated).toHaveBeenCalledOnce();
+    });
+
+    it("sin fila devuelta (data nula) se trata como una reserva sin pago", async () => {
+      rpc.mockResolvedValue({ data: null, error: null });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result).toEqual({ status: "success", message: "Reserva confirmada." });
+      expect(startBookingPayment).not.toHaveBeenCalled();
+    });
+
+    it("un error de la RPC no arranca ningún pago", async () => {
+      rpc.mockResolvedValue({ data: null, error: { message: "No quedan lugares" } });
+
+      const result = await createPublicBookingAction("negocio", validInput());
+
+      expect(result.status).toBe("error");
+      expect(startBookingPayment).not.toHaveBeenCalled();
+    });
   });
 });

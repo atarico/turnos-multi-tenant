@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { throwingRedirectSpy } from "@/test-support/next-navigation";
@@ -27,6 +27,17 @@ vi.mock("@/modules/booking/application/queries", () => ({
 // Por defecto, un negocio sin suscripción: el panel tiene que pintarse igual.
 vi.mock("@/modules/billing/application/queries", () => ({
   getCurrentSubscription: vi.fn(async () => null),
+}));
+// Por defecto, pagos apagados y sin cuenta: el panel no muestra ningún aviso.
+vi.mock("@/modules/payments/application/queries", () => ({
+  getPaymentsState: vi.fn(async () => ({
+    ok: true,
+    value: { enabled: false, account: null },
+  })),
+}));
+// Por defecto, nada para devolver: el panel no muestra el recordatorio.
+vi.mock("@/modules/payments/application/refunds", () => ({
+  listPaymentsToRefund: vi.fn(async () => ({ ok: true, value: [] })),
 }));
 // Adónde va una cuenta sin negocio ya no lo decide esta página: la decisión
 // tiene dos respuestas y vive en su propio módulo, con sus propios tests. Acá
@@ -67,6 +78,9 @@ const agendaBooking = (
   startsAt: fromNow(offsetMs),
   endsAt: fromNow(offsetMs + HOUR),
   status: "confirmed",
+  paymentStatus: "not_required",
+  priceCents: 5000,
+  currency: "ARS",
 });
 
 /** Una suscripción en prueba que vence dentro de `offsetMs` desde ahora. */
@@ -436,4 +450,100 @@ describe("PanelPage", () => {
       }
     },
   );
+
+  it("ofrece el acceso a Pagos en la barra de navegación", { timeout: 15000 }, async () => {
+    const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+    vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+    const { default: PanelPage } = await import("./page");
+
+    render(await PanelPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole("link", { name: /^pagos$/i })).toHaveAttribute("href", "/panel/pagos");
+  });
+
+  describe("aviso de la conexión de pagos rota", () => {
+    async function renderWithPayments(
+      state: { enabled: boolean; account: { status: "connected" | "broken"; connectedAt: string } | null } | "error",
+    ) {
+      const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+      const { getPaymentsState } = await import("@/modules/payments/application/queries");
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(getPaymentsState).mockResolvedValue(
+        state === "error"
+          ? { ok: false, error: { code: "payments_state_failed", message: "x" } }
+          : { ok: true, value: state },
+      );
+      const { default: PanelPage } = await import("./page");
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+    }
+
+    const broken = { status: "broken" as const, connectedAt: "2026-10-01T15:00:00Z" };
+
+    it("pagos prendidos y cuenta rota: avisa y lleva a reconectar", { timeout: 15000 }, async () => {
+      await renderWithPayments({ enabled: true, account: broken });
+
+      const warning = screen.getByRole("alert");
+      expect(warning).toHaveTextContent(/mercado pago/i);
+      expect(warning).toHaveTextContent(/sin pagar/i);
+      expect(screen.getByRole("link", { name: /reconectar/i })).toHaveAttribute("href", "/panel/pagos");
+    });
+
+    it.each([
+      ["pagos apagados con cuenta rota", { enabled: false, account: broken }],
+      ["pagos prendidos con cuenta sana", { enabled: true, account: { status: "connected" as const, connectedAt: "2026-10-01T15:00:00Z" } }],
+      ["sin cuenta", { enabled: false, account: null }],
+      ["no se pudo leer el estado", "error" as const],
+    ])("no avisa: %s", { timeout: 15000 }, async (_name, state) => {
+      await renderWithPayments(state);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("recordatorio de pagos a devolver", () => {
+    async function renderWithRefunds(result: "error" | number) {
+      const { getCurrentTenant } = await import("@/modules/tenants/application/queries");
+      const { listPaymentsToRefund } = await import("@/modules/payments/application/refunds");
+      vi.mocked(getCurrentTenant).mockResolvedValue(tenant);
+      vi.mocked(listPaymentsToRefund).mockResolvedValue(
+        result === "error"
+          ? { ok: false, error: { code: "refunds_failed", message: "x" } }
+          : {
+              ok: true,
+              value: Array.from({ length: result }, (_, i) => ({
+                id: `p${i}`,
+                bookingId: `b${i}`,
+                customerName: "Cliente",
+                startsAt: "2026-10-10T15:00:00Z",
+                amountCents: 1000,
+                currency: "ARS",
+                mpPaymentId: null,
+                kind: "extra" as const,
+              })),
+            },
+      );
+      const { default: PanelPage } = await import("./page");
+      render(await PanelPage({ searchParams: Promise.resolve({}) }));
+    }
+
+    it("con un pago a devolver lo dice en singular y lleva a Pagos", { timeout: 15000 }, async () => {
+      await renderWithRefunds(1);
+
+      const banner = screen.getByRole("status");
+      expect(banner).toHaveTextContent("Tenés 1 pago a devolver");
+      expect(within(banner).getByRole("link")).toHaveAttribute("href", "/panel/pagos");
+    });
+
+    it("con varios lo dice en plural", { timeout: 15000 }, async () => {
+      await renderWithRefunds(3);
+      expect(screen.getByRole("status")).toHaveTextContent("Tenés 3 pagos a devolver");
+    });
+
+    it.each([
+      ["no hay nada para devolver", 0],
+      ["no se pudo leer la lista", "error" as const],
+    ])("no avisa: %s", { timeout: 15000 }, async (_name, result) => {
+      await renderWithRefunds(result);
+      expect(screen.queryByText(/a devolver/)).not.toBeInTheDocument();
+    });
+  });
 });

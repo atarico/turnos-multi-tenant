@@ -25,6 +25,8 @@ export interface PlanOption {
   staff: number;
   whatsappMessages: number;
   bookingsPerMonth: number;
+  /** ¿El plan puede cobrarle online a sus clientes con Mercado Pago? */
+  onlinePayments: boolean;
 }
 
 interface PlanPickerProps {
@@ -115,6 +117,9 @@ export function PlanPicker({
                 <Feature>
                   Hasta {option.bookingsPerMonth} turnos por mes
                 </Feature>
+                {option.onlinePayments && (
+                  <Feature>Cobro online con Mercado Pago</Feature>
+                )}
                 {/* Último de la lista y sin tilde: lo que todavía no se
                     entrega no puede leerse igual que lo que sí. */}
                 {option.whatsappMessages > 0 ? (

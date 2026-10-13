@@ -63,6 +63,21 @@ const PLAN_RANK: Record<PlanTier, number> = {
 export const TRIAL_PLAN: PlanTier = "pro";
 
 /**
+ * ¿Puede el plan cobrarle online a sus clientes (Mercado Pago del negocio)?
+ *
+ * Desde `pro`. Se pregunta por el RANGO y no por la lista ["pro", "premium"]
+ * para que un plan nuevo por encima de pro herede el permiso sin tocar esto.
+ * Un plan fuera del catálogo da `false`: ante la duda, sin cobros.
+ *
+ * Tiene un espejo en SQL: el `< 'pro'` de `public.set_online_payments`. Se
+ * cambian JUNTOS. Esto sólo decide qué MOSTRAR; quien impide de verdad es la
+ * base.
+ */
+export function planAllowsOnlinePayments(plan: PlanTier): boolean {
+  return Object.hasOwn(PLAN_RANK, plan) && PLAN_RANK[plan] >= PLAN_RANK.pro;
+}
+
+/**
  * El mejor de dos planes.
  *
  * Existe para que un regalo nunca empeore lo comprado: ver `effectivePlan`.

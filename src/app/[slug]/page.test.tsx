@@ -11,7 +11,15 @@ vi.mock("@/modules/booking/application/public-queries", () => ({
 }));
 // El flujo público es un árbol de cliente entero. Acá sólo importa si está.
 vi.mock("@/modules/booking/ui/public-booking-flow", () => ({
-  PublicBookingFlow: () => <div data-testid="public-booking-flow" />,
+  PublicBookingFlow: ({ services }: { services: { payAtBooking?: boolean }[] }) => (
+    <div
+      data-testid="public-booking-flow"
+      data-pay={JSON.stringify(services.map((s) => Boolean(s.payAtBooking)))}
+    />
+  ),
+}));
+vi.mock("@/modules/payments/application/requires-payment", () => ({
+  tenantRequiresPayment: vi.fn(),
 }));
 vi.mock("@/modules/booking/ui/public-header", () => ({
   PublicHeader: ({ name }: { name: string }) => <h1>{name}</h1>,
@@ -156,4 +164,60 @@ describe("PublicBookingPage", () => {
       ).not.toBeInTheDocument();
     },
   );
+
+  describe("cobro al reservar", () => {
+    const services = [
+      { id: "s1", name: "Corte", priceCents: 500000 },
+      { id: "s2", name: "Consulta gratis", priceCents: 0 },
+    ];
+
+    async function arrange(requires: boolean, takes = true) {
+      const { getTenantBySlug } = await import("@/modules/tenants/application/queries");
+      const { listPublicServices } = await import(
+        "@/modules/booking/application/public-queries"
+      );
+      const { tenantRequiresPayment } = await import(
+        "@/modules/payments/application/requires-payment"
+      );
+      vi.mocked(getTenantBySlug).mockResolvedValue(tenant(takes));
+      vi.mocked(listPublicServices).mockResolvedValue({
+        ok: true,
+        value: services,
+      } as unknown as Awaited<ReturnType<typeof listPublicServices>>);
+      vi.mocked(tenantRequiresPayment).mockResolvedValue(requires);
+      return tenantRequiresPayment;
+    }
+
+    it("marca para pagar los servicios con precio cuando el negocio exige pago", async () => {
+      const check = await arrange(true);
+
+      await renderPage();
+
+      expect(check).toHaveBeenCalledWith("t1");
+      // El servicio gratis nunca crea hold: no se anuncia un cobro de $0.
+      expect(screen.getByTestId("public-booking-flow")).toHaveAttribute(
+        "data-pay",
+        "[true,false]",
+      );
+    });
+
+    it("no marca ningún servicio cuando el negocio no exige pago", async () => {
+      await arrange(false);
+
+      await renderPage();
+
+      expect(screen.getByTestId("public-booking-flow")).toHaveAttribute(
+        "data-pay",
+        "[false,false]",
+      );
+    });
+
+    it("un negocio cerrado no consulta el cobro", async () => {
+      const check = await arrange(true, false);
+
+      await renderPage();
+
+      expect(check).not.toHaveBeenCalled();
+    });
+  });
 });
