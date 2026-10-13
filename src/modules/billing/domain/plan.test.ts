@@ -5,6 +5,7 @@ import {
   hasRoomForStaff,
   isOverStaffLimit,
   limitsFor,
+  planAllowsOnlinePayments,
   planLabel,
 } from "./plan";
 
@@ -197,5 +198,21 @@ describe("bookingCeilingState", () => {
     expect(() =>
       bookingCeilingState("enterprise" as Parameters<typeof limitsFor>[0], 10),
     ).toThrow();
+  });
+});
+
+describe("planAllowsOnlinePayments", () => {
+  it("Básico no cobra online; Pro y Premium sí", () => {
+    expect(planAllowsOnlinePayments("basico")).toBe(false);
+    expect(planAllowsOnlinePayments("pro")).toBe(true);
+    expect(planAllowsOnlinePayments("premium")).toBe(true);
+  });
+
+  it("un plan que no está en el catálogo no habilita nada", () => {
+    // Ante la duda, sin cobros: habilitarlos por error manda plata a un
+    // negocio que no los contrató.
+    expect(
+      planAllowsOnlinePayments("toString" as Parameters<typeof limitsFor>[0]),
+    ).toBe(false);
   });
 });
