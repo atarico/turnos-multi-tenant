@@ -30,6 +30,7 @@ import {
 } from "@/modules/booking/application/queries";
 import { AgendaList } from "@/modules/booking/ui/agenda-list";
 import { formatPrice } from "@/modules/catalog/domain/money";
+import { listPaymentsToRefund } from "@/modules/payments/application/refunds";
 import { getPaymentsState } from "@/modules/payments/application/queries";
 import { resolvePublicBookingUrl } from "@/modules/tenants/application/public-url";
 import { getCurrentTenant } from "@/modules/tenants/application/queries";
@@ -84,6 +85,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     revenueResult,
     subscription,
     paymentsState,
+    refundsResult,
   ] = await Promise.all([
     listUpcomingBookings(tenant.id, now),
     listBookingsToClose(tenant.id, now),
@@ -95,6 +97,7 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     ),
     getCurrentSubscription(tenant.id),
     getPaymentsState(tenant.id),
+    listPaymentsToRefund(tenant.id),
   ]);
 
   // Mismo `now` que la agenda: el cartel de prueba y las listas tienen que
@@ -110,6 +113,10 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
     paymentsState.ok &&
     paymentsState.value.enabled &&
     paymentsState.value.account?.status === "broken";
+  // Plata que el dueño todavía le debe a un cliente. Si la lista no se pudo
+  // leer no se dice nada: "tenés 0" sería un dato falso, y la pantalla de Pagos
+  // muestra el error por su cuenta.
+  const refundsDue = refundsResult.ok ? refundsResult.value.length : 0;
   const bookings = bookingsResult.ok ? bookingsResult.value : [];
   const toClose = toCloseResult.ok ? toCloseResult.value : [];
 
@@ -226,6 +233,23 @@ export default async function PanelPage({ searchParams }: PanelPageProps) {
             className="font-medium underline underline-offset-4"
           >
             Reconectar
+          </Link>
+        </div>
+      )}
+
+      {refundsDue > 0 && (
+        <div
+          role="status"
+          className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          <p>
+            Tenés {refundsDue} {refundsDue === 1 ? "pago" : "pagos"} a devolver.
+          </p>
+          <Link
+            href="/panel/pagos"
+            className="font-medium underline underline-offset-4"
+          >
+            Ver pagos
           </Link>
         </div>
       )}

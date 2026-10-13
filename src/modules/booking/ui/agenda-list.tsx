@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 
 import { describeBookingStatus } from "../domain/booking-status";
+import { describePaymentStatus } from "../domain/payment-status";
 import type { AgendaBooking } from "../domain/types";
 import { BookingLifecycleActions } from "./booking-lifecycle-actions";
 
@@ -55,6 +56,7 @@ export function AgendaList({
       {bookings.map((b) => {
         const when = formatWhen(b.startsAt, timezone);
         const status = describeBookingStatus(b.status);
+        const payment = describePaymentStatus(b.paymentStatus);
         return (
           <li key={b.id}>
             <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
@@ -78,6 +80,7 @@ export function AgendaList({
               </div>
               <div className="flex items-center gap-3">
                 <Badge variant={status.tone}>{status.label}</Badge>
+                {payment && <Badge variant={payment.tone}>{payment.label}</Badge>}
                 {withActions && <BookingLifecycleActions booking={b} />}
               </div>
             </Card>

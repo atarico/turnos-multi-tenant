@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { encryptionKey, mpClientCredentials, stateSecret } from "./config";
+import { encryptionKey, mpClientCredentials, paymentsConfigured, stateSecret } from "./config";
 
 let env: Record<string, string | undefined> = {};
 let envThrows = false;
@@ -52,5 +52,24 @@ describe("config de pagos", () => {
 
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe("payments_not_configured");
+  });
+});
+
+describe("paymentsConfigured", () => {
+  const full = {
+    MERCADOPAGO_CLIENT_ID: "123",
+    MERCADOPAGO_CLIENT_SECRET: "sec",
+    PAYMENTS_ENCRYPTION_KEY: "key",
+    PAYMENTS_STATE_SECRET: "state",
+  };
+
+  it("is true only with the whole platform config", () => {
+    env = full;
+    expect(paymentsConfigured()).toBe(true);
+  });
+
+  it.each(Object.keys(full))("is false when %s is missing", (name) => {
+    env = { ...full, [name]: undefined };
+    expect(paymentsConfigured()).toBe(false);
   });
 });

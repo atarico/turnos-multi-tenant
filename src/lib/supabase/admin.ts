@@ -7,17 +7,24 @@ import { serverEnv } from "@/lib/env";
 /**
  * Cliente de Supabase con `service_role`. Saltea RLS por completo.
  *
- * Existe por UNA razón: el visitante anónimo ya no puede ejecutar
- * `create_booking()` (se le revocó el grant), porque la anon key viaja al
- * browser y con ella cualquiera pegaba contra PostgREST directo, sin pasar por
- * la app, y le llenaba la agenda a cualquier negocio. Ahora la reserva pública
- * entra por `create_public_booking()`, que sólo `service_role` puede llamar.
- * Eso convierte a nuestro servidor en la única puerta, que es la condición
- * para que el freno por IP sirva de algo.
+ * Existe porque hay caminos del servidor que no tienen sesión de un miembro y
+ * aun así tienen que leer o escribir con autoridad:
+ *   · la reserva pública: el visitante anónimo no puede ejecutar
+ *     `create_booking()` (se le revocó el grant, porque la anon key viaja al
+ *     browser y con ella cualquiera pegaba contra PostgREST sin pasar por la
+ *     app). Entra por `create_public_booking()`, que sólo `service_role` puede
+ *     llamar: nuestro servidor es la única puerta, y eso hace que el freno por
+ *     IP sirva de algo;
+ *   · los pagos: guardar y leer los tokens de Mercado Pago del negocio, crear
+ *     las preferencias, el webhook, la página pública de retorno de la reserva
+ *     y el cron que vence holds y renueva tokens. Ninguno tiene un miembro
+ *     logueado detrás.
  *
- * REGLA: usar este cliente SÓLO para esa llamada. Todo lo demás va por
- * `@/lib/supabase/server`, que respeta la sesión y la RLS. Un `select` de más
- * hecho desde acá lee la base entera de todos los negocios.
+ * REGLA: sólo del lado del servidor y con un alcance explícito: cada uso filtra
+ * por el negocio (o la reserva) que le toca, y recibe el id desde un valor ya
+ * validado, nunca de input crudo. NUNCA para lecturas que le pertenecen a una
+ * sesión: eso va por `@/lib/supabase/server`, que respeta la sesión y la RLS.
+ * Un `select` de más hecho desde acá lee la base entera de todos los negocios.
  *
  * El `import "server-only"` no es decorativo: si alguien lo importa desde un
  * Client Component, el build falla en vez de filtrar la clave al bundle.

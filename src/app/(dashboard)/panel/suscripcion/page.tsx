@@ -18,6 +18,7 @@ import {
 import {
   bookingCeilingState,
   limitsFor,
+  planAllowsOnlinePayments,
   planLabel,
   TRIAL_PLAN,
 } from "@/modules/billing/domain/plan";
@@ -179,6 +180,7 @@ export default async function SuscripcionPage({
       staff: limits.staff,
       whatsappMessages: limits.whatsappMessages,
       bookingsPerMonth: limits.bookingsPerMonth,
+      onlinePayments: planAllowsOnlinePayments(plan),
     };
   });
 
